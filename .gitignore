@@ -1,0 +1,34 @@
+# Android Kernel Build - Git Ignore
+# This repo tracks build scripts, configs, and patches.
+# Kernel source (common/) and prebuilts are managed by repo.
+
+# Repo-managed directories (tracked externally by repo)
+common/
+common-modules/
+.repo/
+kernel/
+build/
+tools/
+
+# Prebuilt toolchains (large binaries, synced by repo)
+prebuilts/
+prebuilts-master/
+
+# Build output
+out/
+dist/
+
+# Build logs
+*.log
+build-*.log
+
+# Editor/IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db

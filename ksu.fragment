@@ -1,0 +1,9 @@
+# ReSukiSU Kernel Configuration Fragment
+# Applied on top of gki_defconfig for AVD (goldfish) x86_64 builds
+#
+# Usage: merged with gki_defconfig + virtual_device fragments via merge_config.sh
+
+CONFIG_KSU=y
+
+# Tracepoint Syscall Redirect is the default hook method for GKI 2.0 (5.10+)
+# No need to explicitly set CONFIG_KSU_TRACEPOINT_HOOK — it's the default
