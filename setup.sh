@@ -56,27 +56,37 @@ init_vars() {
 
 common_patch_series() {
     {
-        find "${PATCHES_DIR}" -maxdepth 1 -type f -name '*.patch' 2>/dev/null
-        find "${PATCHES_DIR}/common" -maxdepth 1 -type f -name '*.patch' 2>/dev/null
+        find_patch_files "${PATCHES_DIR}"
+        find_patch_files "${PATCHES_DIR}/common"
         if [ -n "${REPO_BRANCH}" ]; then
-            find "${PATCHES_DIR}/${REPO_BRANCH}" -maxdepth 1 -type f -name '*.patch' 2>/dev/null
+            find_patch_files "${PATCHES_DIR}/${REPO_BRANCH}"
         fi
     } | sort
 }
 
 common_patch_cleanup_series() {
     {
-        find "${PATCHES_DIR}" -maxdepth 1 -type f -name '*.patch' 2>/dev/null
-        find "${PATCHES_DIR}/common" -maxdepth 1 -type f -name '*.patch' 2>/dev/null
-        find "${PATCHES_DIR}"/common-* -maxdepth 1 -type f -name '*.patch' 2>/dev/null
+        find_patch_files "${PATCHES_DIR}"
+        find_patch_files "${PATCHES_DIR}/common"
+        shopt -s nullglob
+        for dir in "${PATCHES_DIR}"/common-*; do
+            find_patch_files "${dir}"
+        done
+        shopt -u nullglob
     } | sort
 }
 
 ksu_patch_series() {
     {
-        find "${PATCHES_DIR}/kernelsu" -maxdepth 1 -type f -name '*.patch' 2>/dev/null
-        find "${PATCHES_DIR}/resukisu" -maxdepth 1 -type f -name '*.patch' 2>/dev/null
+        find_patch_files "${PATCHES_DIR}/kernelsu"
+        find_patch_files "${PATCHES_DIR}/resukisu"
     } | sort
+}
+
+find_patch_files() {
+    dir="$1"
+    [ -d "${dir}" ] || return 0
+    find "${dir}" -maxdepth 1 -type f -name '*.patch'
 }
 
 requires_common_patch() {
