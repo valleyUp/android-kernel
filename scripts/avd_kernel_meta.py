@@ -34,8 +34,27 @@ FALLBACK_REPO_PATHS = {
     "kernel/prebuilts/build-tools": ("prebuilts/kernel-build-tools",),
     "platform/build/bazel_common_rules": ("build/bazel_common_rules",),
     "platform/external/bazel-skylib": ("external/bazel-skylib",),
+    "platform/external/bazelbuild-apple_support": ("external/bazelbuild-apple_support",),
+    "platform/external/bazelbuild-bazel-central-registry": (
+        "external/bazelbuild-bazel-central-registry",
+    ),
+    "platform/external/bazelbuild-platforms": ("external/bazelbuild-platforms",),
+    "platform/external/bazelbuild-rules_cc": ("external/bazelbuild-rules_cc",),
+    "platform/external/bazelbuild-rules_java": ("external/bazelbuild-rules_java",),
+    "platform/external/bazelbuild-rules_license": ("external/bazelbuild-rules_license",),
+    "platform/external/bazelbuild-rules_pkg": ("external/bazelbuild-rules_pkg",),
+    "platform/external/bazelbuild-rules_python": ("external/bazelbuild-rules_python",),
+    "platform/external/libcap": ("external/libcap",),
+    "platform/external/libcap-ng": ("external/libcap-ng",),
+    "platform/external/lz4": ("external/lz4",),
+    "platform/external/pigz": ("external/pigz",),
     "platform/external/python/absl-py": ("external/python/absl-py",),
     "platform/external/stardoc": ("external/stardoc",),
+    "platform/external/toybox": ("external/toybox",),
+    "platform/external/virtio-media": ("external/virtio-media",),
+    "platform/external/zlib": ("external/zlib",),
+    "platform/external/zopfli": ("external/zopfli",),
+    "platform/prebuilts/asuite": ("prebuilts/asuite",),
     "platform/prebuilts/bazel/linux-x86_64": ("prebuilts/bazel/linux-x86_64",),
     "platform/prebuilts/build-tools": ("prebuilts/build-tools",),
     "platform/prebuilts/clang-tools": ("prebuilts/clang-tools",),
@@ -44,8 +63,11 @@ FALLBACK_REPO_PATHS = {
         "prebuilts/gcc/linux-x86/host/x86_64-linux-glibc2.17-4.8",
     ),
     "platform/prebuilts/jdk/jdk11": ("prebuilts/jdk/jdk11",),
+    "platform/prebuilts/rust": ("prebuilts/rust",),
     "platform/system/tools/mkbootimg": ("tools/mkbootimg",),
+    "platform/tools/tradefederation/prebuilts": ("tools/tradefederation/prebuilts",),
     "toolchain/prebuilts/ndk/r23": ("prebuilts/ndk-r23",),
+    "toolchain/prebuilts/ndk/r26": ("prebuilts/ndk-r26",),
 }
 
 
@@ -303,10 +325,23 @@ def git_head(path: Path) -> str:
         return ""
 
 
-def verify_checkout(meta: dict[str, Any], root: Path, required: list[str]) -> int:
+def verify_checkout(meta: dict[str, Any], root: Path, required: list[str], all_local: bool = False) -> int:
     repo_commits = meta.get("repo_commits", {})
+    repos = list(dict.fromkeys(required))
+    if all_local:
+        for repo_name, _relpath, _commit in checkout_plan(meta, root):
+            if repo_name not in repos:
+                repos.append(repo_name)
+    if not repos:
+        print(
+            "ERROR: no repositories selected for checkout verification; "
+            "pass --required or --all-local",
+            file=sys.stderr,
+        )
+        return 2
+
     errors: list[str] = []
-    for repo_name in required:
+    for repo_name in repos:
         expected = repo_commits.get(repo_name, "")
         if not expected:
             errors.append(
@@ -385,7 +420,7 @@ def cmd_checkout_plan(args: argparse.Namespace) -> int:
 def cmd_verify_checkout(args: argparse.Namespace) -> int:
     meta = json.loads(Path(args.meta).read_text(encoding="utf-8"))
     root = Path(args.root).resolve()
-    return verify_checkout(meta, root, args.required)
+    return verify_checkout(meta, root, args.required, args.all_local)
 
 
 def main() -> int:
@@ -423,7 +458,12 @@ def main() -> int:
     verify_p = sub.add_parser("verify-checkout")
     verify_p.add_argument("--meta", required=True)
     verify_p.add_argument("--root", default=os.getcwd())
-    verify_p.add_argument("--required", action="append", required=True)
+    verify_p.add_argument("--required", action="append", default=[])
+    verify_p.add_argument(
+        "--all-local",
+        action="store_true",
+        help="Also verify every BUILD_INFO repository that maps to a local git project.",
+    )
     verify_p.set_defaults(func=cmd_verify_checkout)
 
     return args_func(parser.parse_args())

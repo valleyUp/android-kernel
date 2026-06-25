@@ -22,12 +22,6 @@ CRITICAL_REPOS=(
     kernel/common-modules/virtual-device
     kernel/build
     kernel/configs
-    kernel/prebuilts/build-tools
-    platform/build/bazel_common_rules
-    platform/external/bazel-skylib
-    platform/prebuilts/bazel/linux-x86_64
-    platform/prebuilts/build-tools
-    platform/prebuilts/jdk/jdk11
 )
 
 usage() {
@@ -68,6 +62,8 @@ while [ "$#" -gt 0 ]; do
         --no-checkout) DO_CHECKOUT=0; shift ;;
         --dry-run) DRY_RUN=1; shift ;;
         -j|--jobs) JOBS="$2"; shift 2 ;;
+        -j*) JOBS="${1#-j}"; shift ;;
+        --jobs=*) JOBS="${1#*=}"; shift ;;
         -h|--help) usage; exit 0 ;;
         *) echo "Unknown argument: $1" >&2; usage; exit 2 ;;
     esac
@@ -101,10 +97,12 @@ if [ "${DO_SYNC}" -eq 0 ]; then
     exit 0
 fi
 
-command -v repo >/dev/null 2>&1 || {
-    echo "ERROR: repo command not found. Install it into PATH first." >&2
-    exit 1
-}
+if [ "${DRY_RUN}" -eq 0 ]; then
+    command -v repo >/dev/null 2>&1 || {
+        echo "ERROR: repo command not found. Install it into PATH first." >&2
+        exit 1
+    }
+fi
 
 cd "${ROOT_DIR}"
 run repo init --depth=1 \
@@ -135,7 +133,7 @@ done
 
 if [ "${DRY_RUN}" -eq 0 ]; then
     echo "=== Verify exact checkout ==="
-    VERIFY_ARGS=(verify-checkout --meta "${META_JSON}" --root "${ROOT_DIR}")
+    VERIFY_ARGS=(verify-checkout --meta "${META_JSON}" --root "${ROOT_DIR}" --all-local)
     for repo_name in "${CRITICAL_REPOS[@]}"; do
         VERIFY_ARGS+=(--required "${repo_name}")
     done

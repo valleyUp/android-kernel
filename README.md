@@ -25,19 +25,22 @@ android-kernel/
 
 ### 1. 准备目标版本
 
-把 AVD 的完整 `/proc/version` 直接传给 `prepare.sh`：
+推荐把 AVD 的完整 `/proc/version` 保存到文件后传给 `prepare.sh`，避免长字符串里的括号、`#`、空格或复制引号被 shell 误处理：
 
 ```bash
-bash prepare.sh --proc-version \
-'Linux version 6.1.23-android14-4-00257-g7e35917775b8-ab9964412 (build-user@build-host) ...'
+cat > proc-version.txt <<'EOF'
+Linux version 6.6.66-android15-8-gb66429556fb8-ab13070261 (kleaf@build-host) (Android (11368308, +pgo, +bolt, +lto, +mlgo, based on r510928) clang version 18.0.0 (https://android.googlesource.com/toolchain/llvm-project 477610d4d0d988e69dbc3fae4fe86bff3f07f2b5), LLD 18.0.0) #1 SMP PREEMPT Fri Feb 14 22:29:59 UTC 2025
+EOF
+
+bash prepare.sh --proc-version-file proc-version.txt -j16
 ```
 
 该示例会解析为：
 
 ```text
-repo branch : common-android14-6.1
-build id    : 9964412
-commit      : 7e35917775b8
+repo branch : common-android15-6.6
+build id    : 13070261
+commit      : b66429556fb8
 ```
 
 `prepare.sh` 会生成：
@@ -47,7 +50,7 @@ out/target.json   # 完整元数据和 CI 状态
 out/target.env    # build/setup 脚本可 source 的环境变量
 ```
 
-脚本会读取 Android CI `BUILD_INFO` 的 `repo-dict`，并按当前 repo manifest checkout 所有本地已同步仓库的精确 commit，包括 `kernel/common`、`kernel/common-modules/virtual-device`、`kernel/build`、`kernel/configs`、`prebuilts/bazel`、`prebuilts/jdk`、`build/bazel_common_rules` 等。Android CI 的 `view/BUILD_INFO` 页面有时返回 Artifact Viewer HTML，脚本会自动解析其中的签名 artifact URL 再下载真实 JSON。
+脚本会读取 Android CI `BUILD_INFO` 的 `repo-dict`，并按当前 repo manifest checkout 所有本地已同步仓库的精确 commit。不同 Android 版本的 prebuilts 列表会变化，例如 Android 14 可能包含 `platform/prebuilts/bazel/linux-x86_64`，Android 15 则可能改由其他 Bazel/Rust/NDK prebuilts 组合提供；脚本会按当前 BUILD_INFO 和 manifest 动态对齐，不再依赖固定仓库列表。Android CI 的 `view/BUILD_INFO` 页面有时返回 Artifact Viewer HTML，脚本会自动解析其中的签名 artifact URL 再下载真实 JSON。
 
 对 Android 13/14/15 的 Bazel/Kleaf 分支，不能只对齐 `kernel/common`。如果 `common-modules/virtual-device`、`kernel/build` 或 Bazel/JDK prebuilts 留在 branch tip，会出现类似 `//common:modules.bzl does not contain symbol get_gki_modules_list` 或 `@local_jdk//:runtime_toolchain_definition` 的版本错配。`prepare.sh` 和 `build.sh` 会在这种不完整状态下直接失败，要求重新执行准备步骤。
 

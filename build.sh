@@ -19,12 +19,6 @@ CRITICAL_REPOS=(
     kernel/common-modules/virtual-device
     kernel/build
     kernel/configs
-    kernel/prebuilts/build-tools
-    platform/build/bazel_common_rules
-    platform/external/bazel-skylib
-    platform/prebuilts/bazel/linux-x86_64
-    platform/prebuilts/build-tools
-    platform/prebuilts/jdk/jdk11
 )
 
 usage() {
@@ -64,6 +58,8 @@ while [ "$#" -gt 0 ]; do
         --build-system) BUILD_SYSTEM="$2"; shift 2 ;;
         --skip-metadata-check) SKIP_METADATA_CHECK=1; shift ;;
         -j|--jobs) JOBS="$2"; shift 2 ;;
+        -j*) JOBS="${1#-j}"; shift ;;
+        --jobs=*) JOBS="${1#*=}"; shift ;;
         -h|--help) usage; exit 0 ;;
         *) echo "Unknown argument: $1" >&2; usage; exit 2 ;;
     esac
@@ -130,7 +126,7 @@ validate_bazel_metadata() {
         echo "ERROR: ${TARGET_JSON} not found. Run prepare.sh before build.sh." >&2
         exit 1
     fi
-    VERIFY_ARGS=(verify-checkout --meta "${TARGET_JSON}" --root "${ROOT_DIR}")
+    VERIFY_ARGS=(verify-checkout --meta "${TARGET_JSON}" --root "${ROOT_DIR}" --all-local)
     for repo_name in "${CRITICAL_REPOS[@]}"; do
         VERIFY_ARGS+=(--required "${repo_name}")
     done
