@@ -11,6 +11,9 @@ JOBS="${JOBS:-$(nproc)}"
 DRY_RUN=0
 BUILD_SYSTEM="${BUILD_SYSTEM:-auto}"
 SKIP_METADATA_CHECK=0
+BAZEL_HOSTCFLAGS="${BAZEL_HOSTCFLAGS:---sysroot= -std=gnu11}"
+BAZEL_HOSTLDFLAGS="${BAZEL_HOSTLDFLAGS:---sysroot=}"
+BAZEL_EXTRA_CFLAGS="${BAZEL_EXTRA_CFLAGS:--std=gnu11}"
 CRITICAL_REPOS=(
     kernel/common
     kernel/common-modules/virtual-device
@@ -36,6 +39,11 @@ Legacy branches such as common-android11-5.4 use build/build.sh.
 
 Options:
   --skip-metadata-check  Skip BUILD_INFO checkout verification for branch-tip builds.
+
+Environment:
+  BAZEL_HOSTCFLAGS       Host tool C flags. Default: "--sysroot= -std=gnu11"
+  BAZEL_HOSTLDFLAGS      Host tool link flags. Default: "--sysroot="
+  BAZEL_EXTRA_CFLAGS     Extra C flags for nested tools. Default: "-std=gnu11"
 EOF
 }
 
@@ -102,6 +110,13 @@ configure_arm64_qemu_env() {
     fi
 }
 
+bazel_host_env_args() {
+    printf '%s\n' \
+        "--action_env=HOSTCFLAGS=${BAZEL_HOSTCFLAGS}" \
+        "--action_env=HOSTLDFLAGS=${BAZEL_HOSTLDFLAGS}" \
+        "--action_env=EXTRA_CFLAGS=${BAZEL_EXTRA_CFLAGS}"
+}
+
 validate_bazel_metadata() {
     if [ "${SKIP_METADATA_CHECK}" -eq 1 ]; then
         echo "[i] BUILD_INFO checkout verification skipped by --skip-metadata-check."
@@ -138,11 +153,14 @@ build_with_bazel() {
     }
     mkdir -p "${DIST_DIR}"
     cd "${ROOT_DIR}"
+    mapfile -t host_env_args < <(bazel_host_env_args)
     run "${bazel_bin}" run \
         --config=fast \
         --config=stamp \
         --lto=none \
         --jobs="${JOBS}" \
+        --make_jobs="${JOBS}" \
+        "${host_env_args[@]}" \
         //common-modules/virtual-device:virtual_device_x86_64_dist \
         -- --dist_dir="${DIST_DIR}"
 }

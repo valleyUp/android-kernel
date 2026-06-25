@@ -89,12 +89,29 @@ Android 13/14/15 的 modern kernel 会使用 Bazel/Kleaf：
 bash build.sh -j4
 ```
 
+`build.sh` 会给 Kleaf action 注入 host-tools 兼容参数：
+
+```text
+HOSTCFLAGS=--sysroot= -std=gnu11
+HOSTLDFLAGS=--sysroot=
+EXTRA_CFLAGS=-std=gnu11
+```
+
+这是为了避免新发行版 glibc 头文件和旧 Android host sysroot 混用时出现 `__isoc23_strtol` / `__isoc23_strtoul` 链接错误。需要覆盖时可设置 `BAZEL_HOSTCFLAGS`、`BAZEL_HOSTLDFLAGS`、`BAZEL_EXTRA_CFLAGS`。
+
 `build.sh` 会先校验 `out/target.json` 中记录的 CI commit 是否与当前源码 checkout 一致。如果你更新了脚本或换了 `/proc/version`，先重新运行：
 
 ```bash
 bash prepare.sh --proc-version-file proc-version.txt -j16
 bash setup.sh --cleanup 2>/dev/null || true
 bash setup.sh
+bash build.sh -j16
+```
+
+如果之前已经失败过 host tools 编译，建议先清理一次旧 Kbuild cache：
+
+```bash
+rm -rf out/cache
 bash build.sh -j16
 ```
 
