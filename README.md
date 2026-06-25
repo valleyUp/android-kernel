@@ -8,8 +8,7 @@
 android-kernel/
 ├── common/                  # Android Common Kernel 源码 (repo sync)
 ├── common-modules/          # 外部内核模块 (virtual-device, etc.)
-├── resukisu-kernel/         # ReSukiSU 内核模块源码
-├── patches/                 # 内核集成补丁
+├── KernelSU/                # ReSukiSU 内核模块 (git submodule)
 ├── prebuilts/               # Clang/GCC 预编译工具链 (repo sync)
 ├── build/                   # 构建工具
 ├── ksu.fragment             # ReSukiSU 内核配置片段
@@ -69,8 +68,9 @@ bash setup.sh
 ```
 
 此脚本会：
-- 将 `resukisu-kernel/kernel/` 复制到 `common/drivers/resukisu/`
-- 应用 `patches/` 目录下的补丁（修改 drivers/Kconfig 和 drivers/Makefile）
+- 初始化 ReSukiSU git submodule (`KernelSU/`)
+- 创建符号链接 `common/drivers/kernelsu -> ../../KernelSU/kernel`
+- 修改 `common/drivers/Kconfig` 和 `common/drivers/Makefile`（保持为工作区修改，不提交到上游内核）
 
 ### 3. 构建内核
 

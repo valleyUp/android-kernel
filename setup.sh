@@ -1,80 +1,120 @@
-#!/bin/bash
+#!/bin/sh
 # ReSukiSU Kernel Integration Setup
-# Run this script AFTER 'repo sync' to integrate ReSukiSU into the kernel source.
+# ===================================
+# Integrates the ReSukiSU kernel module into the Android Common Kernel tree.
 #
-# Usage: bash setup.sh
+# This script:
+#   1. Initializes the ReSukiSU git submodule (KernelSU/)
+#   2. Creates a symlink: common/drivers/kernelsu -> ../../KernelSU/kernel
+#   3. Appends build entries to common/drivers/Kconfig and common/drivers/Makefile
+#
+# The modifications to common/ are intentionally left as uncommitted working-tree
+# changes — they do NOT pollute the upstream AOSP kernel git history.
+#
+# Usage:
+#   bash setup.sh                  # Integrate ReSukiSU
+#   bash setup.sh --cleanup        # Remove ReSukiSU integration
+#   bash setup.sh --help           # Show help
+#
+# Reference: https://resukisu.github.io/guide/build.html
 
-set -euo pipefail
+set -eu
 
-ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
-KERNEL_DIR="${ROOT_DIR}/common"
-RESUKISU_SRC="${ROOT_DIR}/resukisu-kernel"
-PATCHES_DIR="${ROOT_DIR}/patches"
+GKI_ROOT="$(cd "$(dirname "$0")" && pwd)"
 
-echo "=== ReSukiSU Kernel Integration Setup ==="
-echo "Root dir: ${ROOT_DIR}"
-echo "Kernel dir: ${KERNEL_DIR}"
-echo ""
+display_usage() {
+	echo "Usage: $0 [--cleanup | --help]"
+	echo "  --cleanup     Cleans up previous modifications made by the script."
+	echo "  -h, --help    Displays this usage information."
+	echo "  (no args)     Sets up ReSukiSU integration."
+}
 
-# Check prerequisites
-if [ ! -d "${KERNEL_DIR}" ]; then
-    echo "ERROR: Kernel source not found at ${KERNEL_DIR}"
-    echo "Run 'repo sync' first to download the kernel source."
-    exit 1
-fi
+initialize_variables() {
+	if [ -d "$GKI_ROOT/common/drivers" ]; then
+		 DRIVER_DIR="$GKI_ROOT/common/drivers"
+	elif [ -d "$GKI_ROOT/drivers" ]; then
+		 DRIVER_DIR="$GKI_ROOT/drivers"
+	else
+		 echo '[ERROR] "drivers/" directory not found.'
+		 exit 127
+	fi
 
-if [ ! -d "${RESUKISU_SRC}/kernel" ]; then
-    echo "ERROR: ReSukiSU kernel source not found at ${RESUKISU_SRC}"
-    echo "Clone it first: git submodule update --init"
-    exit 1
-fi
+	KSU_SUBMODULE="$GKI_ROOT/KernelSU"
+	KSU_KERNEL_DIR="$KSU_SUBMODULE/kernel"
+	DRIVER_MAKEFILE="$DRIVER_DIR/Makefile"
+	DRIVER_KCONFIG="$DRIVER_DIR/Kconfig"
+	SYMLINK="$DRIVER_DIR/kernelsu"
+}
 
-# Step 1: Copy ReSukiSU kernel source into the kernel drivers directory
-echo "[1/3] Copying ReSukiSU kernel source into drivers/resukisu/..."
-if [ -d "${KERNEL_DIR}/drivers/resukisu" ]; then
-    echo "      Removing existing drivers/resukisu/..."
-    rm -rf "${KERNEL_DIR}/drivers/resukisu"
-fi
-cp -r "${RESUKISU_SRC}/kernel" "${KERNEL_DIR}/drivers/resukisu"
-echo "      Done."
+# Reverts modifications made by this script
+perform_cleanup() {
+	echo "[+] Cleaning up ReSukiSU integration..."
+	if [ -L "$SYMLINK" ]; then
+		rm "$SYMLINK" && echo "[-] Symlink removed."
+	fi
+	if grep -q "kernelsu" "$DRIVER_MAKEFILE" 2>/dev/null; then
+		sed -i '/kernelsu/d' "$DRIVER_MAKEFILE" && echo "[-] Makefile reverted."
+	fi
+	if grep -q "drivers/kernelsu/Kconfig" "$DRIVER_KCONFIG" 2>/dev/null; then
+		sed -i '/drivers\/kernelsu\/Kconfig/d' "$DRIVER_KCONFIG" && echo "[-] Kconfig reverted."
+	fi
+	echo '[+] Cleanup complete.'
+}
 
-# Step 2: Apply integration patches (Kconfig, Makefile)
-echo "[2/3] Applying integration patches..."
-for patch in "${PATCHES_DIR}"/*.patch; do
-    if [ -f "$patch" ]; then
-        echo "      Applying: $(basename "$patch")"
-        (cd "${KERNEL_DIR}" && git apply --check "$patch" 2>&1) || {
-            echo "      WARNING: Patch $(basename "$patch") may already be applied or conflicts exist."
-            echo "      Trying to apply anyway..."
-            (cd "${KERNEL_DIR}" && git apply "$patch" 2>&1) || {
-                echo "      ERROR: Failed to apply patch. Kernel source may have changed."
-                echo "      Check ${patch} and apply manually if needed."
-            }
-        }
-    fi
-done
-echo "      Done."
+# Sets up ReSukiSU integration
+setup_kernelsu() {
+	echo "[+] Setting up ReSukiSU integration..."
 
-# Step 3: Verify integration
-echo "[3/3] Verifying integration..."
-if grep -q "resukisu/kernel/Kconfig" "${KERNEL_DIR}/drivers/Kconfig"; then
-    echo "      [OK] drivers/Kconfig updated"
+	# 1. Initialize the git submodule
+	if [ ! -d "$KSU_KERNEL_DIR" ]; then
+		echo "[+] Initializing ReSukiSU submodule..."
+		git -C "$GKI_ROOT" submodule update --init KernelSU
+		echo "[+] Submodule initialized."
+	else
+		echo "[i] KernelSU submodule already present at $KSU_SUBMODULE"
+	fi
+
+	# 2. Create symlink
+	if [ -L "$SYMLINK" ]; then
+		echo "[i] Symlink already exists: $SYMLINK -> $(readlink "$SYMLINK")"
+	else
+		REL_PATH=$(realpath --relative-to="$DRIVER_DIR" "$KSU_KERNEL_DIR")
+		ln -sf "$REL_PATH" "$SYMLINK"
+		echo "[+] Symlink created: drivers/kernelsu -> $REL_PATH"
+	fi
+
+	# 3. Append to drivers/Makefile (if not already present)
+	if grep -q "kernelsu" "$DRIVER_MAKEFILE" 2>/dev/null; then
+		echo "[i] Makefile already has kernelsu entry."
+	else
+		printf '\nobj-$(CONFIG_KSU) += kernelsu/\n' >> "$DRIVER_MAKEFILE"
+		echo "[+] Appended to drivers/Makefile."
+	fi
+
+	# 4. Append to drivers/Kconfig (if not already present)
+	if grep -q "drivers/kernelsu/Kconfig" "$DRIVER_KCONFIG" 2>/dev/null; then
+		echo "[i] Kconfig already has kernelsu entry."
+	else
+		sed -i '/^endmenu/i source "drivers/kernelsu/Kconfig"' "$DRIVER_KCONFIG"
+		echo "[+] Appended to drivers/Kconfig."
+	fi
+
+	echo '[+] ReSukiSU integration complete.'
+	echo ''
+	echo '    Next: bash build.sh'
+}
+
+# Process command-line arguments
+if [ "$#" -eq 0 ]; then
+	initialize_variables
+	setup_kernelsu
+elif [ "$1" = "-h" ] || [ "$1" = "--help" ]; then
+	display_usage
+elif [ "$1" = "--cleanup" ]; then
+	initialize_variables
+	perform_cleanup
 else
-    echo "      [WARNING] drivers/Kconfig may not be updated correctly"
+	echo "Unknown argument: $1"
+	display_usage
+	exit 1
 fi
-
-if grep -q "resukisu/kernel/" "${KERNEL_DIR}/drivers/Makefile"; then
-    echo "      [OK] drivers/Makefile updated"
-else
-    echo "      [WARNING] drivers/Makefile may not be updated correctly"
-fi
-
-if [ -f "${KERNEL_DIR}/drivers/resukisu/Kconfig" ]; then
-    echo "      [OK] ReSukiSU kernel source in place"
-else
-    echo "      [WARNING] ReSukiSU kernel source not found at expected path"
-fi
-
-echo ""
-echo "=== Setup complete ==="
-echo "Next: bash build.sh"

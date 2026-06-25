@@ -32,8 +32,10 @@ if [ ! -d "${KERNEL_DIR}" ]; then
     exit 1
 fi
 
-if [ ! -d "${KERNEL_DIR}/drivers/resukisu" ]; then
-    echo "ERROR: ReSukiSU not integrated. Run 'bash setup.sh' first."
+if [ ! -L "${KERNEL_DIR}/drivers/kernelsu" ]; then
+    echo "ERROR: ReSukiSU not integrated."
+    echo "Run: git submodule update --init KernelSU"
+    echo "Then: ln -sf ../../KernelSU/kernel common/drivers/kernelsu"
     exit 1
 fi
 
