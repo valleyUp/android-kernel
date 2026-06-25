@@ -1,0 +1,33 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: VPS Builder <build@vps.local>
+Date: Thu, 25 Jun 2026 00:00:00 +0000
+Subject: [PATCH] tools lib subcmd: avoid glibc C23 strtol redirect
+
+Newer glibc versions enable C23 strtol-family redirects when _GNU_SOURCE is
+defined. Android's older host-tool sysroot does not provide the __isoc23_*
+symbols, so host tools such as objtool and resolve_btfids can fail to link.
+
+Keep the non-GNU default/LFS feature set for libsubcmd host tools so they call
+the long-standing strtol-family symbols.
+---
+ tools/lib/subcmd/Makefile | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/tools/lib/subcmd/Makefile b/tools/lib/subcmd/Makefile
+index 50d4297bca1f..87dffccdd115 100644
+--- a/tools/lib/subcmd/Makefile
++++ b/tools/lib/subcmd/Makefile
+@@ -34,6 +34,10 @@ endif
+ 
+ CFLAGS += -D_LARGEFILE64_SOURCE -D_FILE_OFFSET_BITS=64 -D_GNU_SOURCE
+ 
++# Avoid glibc 2.38+ C23 strtol redirects when linking against older host
++# sysroots that do not provide __isoc23_strtol-family symbols.
++CFLAGS += -U_GNU_SOURCE -D_DEFAULT_SOURCE -D_LARGEFILE64_SOURCE
++
+ CFLAGS += -I$(srctree)/tools/include/
+ 
+ CFLAGS += $(EXTRA_WARNINGS) $(EXTRA_CFLAGS)
+-- 
+2.45.0
+
