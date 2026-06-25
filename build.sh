@@ -1,202 +1,138 @@
-#!/bin/bash
-# ReSukiSU AVD Kernel Build Script
-# Builds a GKI x86_64 kernel with ReSukiSU for Android Virtual Device (goldfish/emulator)
-#
-# Prerequisites:
-#   1. repo sync (kernel source in common/)
-#   2. bash setup.sh (integrate ReSukiSU)
-#   3. Run this script from the repo root
-#
-# Usage: bash build.sh
+#!/usr/bin/env bash
+# Build the selected AVD x86_64 kernel. Use --dry-run to print without compiling.
 
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
-KERNEL_DIR="${ROOT_DIR}/common"
-OUT_DIR="${ROOT_DIR}/out/android14-6.1/common"
-DIST_DIR="${ROOT_DIR}/dist"
-MODULES_DIR="${ROOT_DIR}/common-modules/virtual-device"
+TARGET_ENV="${AVD_TARGET_ENV:-${ROOT_DIR}/out/target.env}"
+DIST_DIR="${DIST_DIR:-${ROOT_DIR}/dist}"
+JOBS="${JOBS:-$(nproc)}"
+DRY_RUN=0
+BUILD_SYSTEM="${BUILD_SYSTEM:-auto}"
 
-# Toolchain configuration (from build.config.constants + build.config.x86_64)
-CLANG_VERSION="r487747c"
-ARCH="x86_64"
-CLANG_PREBUILT="${ROOT_DIR}/prebuilts/clang/host/linux-x86/clang-${CLANG_VERSION}/bin"
-# GCC and build-tools are optional (used for host tooling, not strictly needed with LLVM=1)
-GCC_PREBUILT="${ROOT_DIR}/prebuilts/gcc/linux-x86/host/x86_64-linux-glibc2.17-4.8/bin"
-BUILDTOOLS_BIN="${ROOT_DIR}/build/kernel/build-tools/path/linux-x86"
+usage() {
+    cat <<'EOF'
+Usage:
+  bash build.sh --dry-run
+  bash build.sh [-j N] [--dist-dir DIR] [--build-system auto|bazel|legacy]
 
-# Check prerequisites
-if [ ! -d "${KERNEL_DIR}" ]; then
-    echo "ERROR: Kernel source not found at ${KERNEL_DIR}"
-    echo "Run 'repo sync' first."
-    exit 1
-fi
-
-if [ ! -L "${KERNEL_DIR}/drivers/kernelsu" ]; then
-    echo "ERROR: ReSukiSU not integrated."
-    echo "Run: git submodule update --init KernelSU"
-    echo "Then: ln -sf ../../KernelSU/kernel common/drivers/kernelsu"
-    exit 1
-fi
-
-if [ ! -d "${CLANG_PREBUILT}" ]; then
-    echo "ERROR: Clang prebuilts not found at ${CLANG_PREBUILT}"
-    echo "Run 'repo sync' to download prebuilts. (repo sync prebuilts/clang/host/linux-x86)"
-    exit 1
-fi
-
-echo "=== ReSukiSU AVD Kernel Build ==="
-echo "Kernel: $(cd ${KERNEL_DIR} && git log --oneline -1)"
-echo "Arch: ${ARCH}"
-echo "Clang: ${CLANG_VERSION}"
-echo ""
-
-# Set up QEMU for x86_64 cross-build on ARM64
-ARCH_HOST=$(uname -m)
-if [ "${ARCH_HOST}" = "aarch64" ] || [ "${ARCH_HOST}" = "arm64" ]; then
-    export QEMU_LD_PREFIX=/opt/aosp-x86_64-sysroot
-    export QEMU_X86_64=/usr/local/bin/qemu-x86_64
-    if [ ! -f "${QEMU_X86_64}" ]; then
-        echo "WARNING: QEMU x86_64 not found at ${QEMU_X86_64}"
-        echo "x86_64 clang binaries may not work on this ARM64 host."
-    fi
-fi
-
-# Set up PATH (only include directories that exist)
-NEW_PATH="${CLANG_PREBUILT}:${PATH}"
-[ -d "${GCC_PREBUILT}" ] && NEW_PATH="${GCC_PREBUILT}:${NEW_PATH}"
-[ -d "${BUILDTOOLS_BIN}" ] && NEW_PATH="${BUILDTOOLS_BIN}:${NEW_PATH}"
-export PATH="${NEW_PATH}"
-export LLVM=1
-
-# Create output directories
-mkdir -p "${OUT_DIR}"
-mkdir -p "${DIST_DIR}"
-
-# --- Step 1: Merge kernel configs ---
-echo "[1/4] Merging kernel configs..."
-DEFCONFIG="vd_x86_64_ksu_defconfig"
-MERGED_CONFIG="${OUT_DIR}/arch/x86/configs/${DEFCONFIG}"
-
-mkdir -p "$(dirname "${MERGED_CONFIG}")"
-
-CONFIG_FRAGMENTS=(
-    "${KERNEL_DIR}/arch/x86/configs/gki_defconfig"
-    "${MODULES_DIR}/virtual_device_core.fragment"
-    "${MODULES_DIR}/virtual_device.fragment"
-    "${ROOT_DIR}/ksu.fragment"
-)
-
-KCONFIG_CONFIG="${MERGED_CONFIG}" \
-    "${KERNEL_DIR}/scripts/kconfig/merge_config.sh" -m -r \
-    "${CONFIG_FRAGMENTS[@]}"
-
-echo "      Merged config written to ${MERGED_CONFIG}"
-echo ""
-
-# --- Step 2: Build GKI kernel ---
-echo "[2/4] Building GKI kernel (bzImage + modules)..."
-make -C "${KERNEL_DIR}" \
-    O="${OUT_DIR}" \
-    ARCH="${ARCH}" \
-    KCFLAGS="-D__ANDROID_COMMON_KERNEL__" \
-    ${DEFCONFIG}
-
-make -C "${KERNEL_DIR}" \
-    O="${OUT_DIR}" \
-    ARCH="${ARCH}" \
-    KCFLAGS="-D__ANDROID_COMMON_KERNEL__" \
-    -j$(nproc) bzImage modules
-
-echo "      Kernel build complete."
-echo ""
-
-# --- Step 3: Build virtual-device external modules ---
-echo "[3/4] Building virtual-device external modules..."
-EXT_MODULES_OUT="${ROOT_DIR}/out/android14-6.1/virtual-device"
-
-if [ -f "${MODULES_DIR}/Kbuild" ] || [ -f "${MODULES_DIR}/Makefile" ]; then
-    make -C "${KERNEL_DIR}" \
-        O="${OUT_DIR}" \
-        ARCH="${ARCH}" \
-        M="${MODULES_DIR}" \
-        INSTALL_MOD_PATH="${EXT_MODULES_OUT}" \
-        KCFLAGS="-D__ANDROID_COMMON_KERNEL__" \
-        -j$(nproc) modules
-
-    # Install modules
-    make -C "${KERNEL_DIR}" \
-        O="${OUT_DIR}" \
-        ARCH="${ARCH}" \
-        M="${MODULES_DIR}" \
-        INSTALL_MOD_PATH="${EXT_MODULES_OUT}" \
-        INSTALL_MOD_STRIP=1 \
-        modules_install 2>/dev/null || true
-    echo "      External modules built."
-else
-    echo "      No external modules to build (no Kbuild/Makefile in ${MODULES_DIR})."
-fi
-echo ""
-
-# --- Step 4: Collect artifacts ---
-echo "[4/4] Collecting build artifacts..."
-
-KERNEL_IMAGE="${OUT_DIR}/arch/x86/boot/bzImage"
-VMLINUX="${OUT_DIR}/vmlinux"
-SYSTEM_MAP="${OUT_DIR}/System.map"
-
-# Collect in dist/
-rm -rf "${DIST_DIR}"
-mkdir -p "${DIST_DIR}"
-
-if [ -f "${KERNEL_IMAGE}" ]; then
-    cp "${KERNEL_IMAGE}" "${DIST_DIR}/"
-    echo "      [OK] bzImage"
-else
-    echo "      [FAIL] bzImage not found!"
-fi
-
-if [ -f "${VMLINUX}" ]; then
-    cp "${VMLINUX}" "${DIST_DIR}/"
-    echo "      [OK] vmlinux"
-else
-    echo "      [WARN] vmlinux not found"
-fi
-
-if [ -f "${SYSTEM_MAP}" ]; then
-    cp "${SYSTEM_MAP}" "${DIST_DIR}/"
-    echo "      [OK] System.map"
-fi
-
-# Collect all .ko modules
-echo "      Collecting kernel modules..."
-find "${OUT_DIR}" -name "*.ko" -exec cp {} "${DIST_DIR}/" \; 2>/dev/null || true
-find "${EXT_MODULES_OUT}" -name "*.ko" -exec cp {} "${DIST_DIR}/" \; 2>/dev/null || true
-
-KO_COUNT=$(find "${DIST_DIR}" -name "*.ko" | wc -l)
-echo "      Found ${KO_COUNT} kernel modules"
-
-# Write build info
-cat > "${DIST_DIR}/build-info.txt" << EOF
-ReSukiSU AVD Kernel Build
-=========================
-Build date: $(date -u)
-Target AVD: 6.1.23-android14-4 (build ab9964412)
-Kernel commit: $(cd ${KERNEL_DIR} && git rev-parse HEAD)
-Kernel branch: android14-6.1
-Clang: ${CLANG_VERSION}
-Arch: ${ARCH}
-ReSukiSU commit: $(cd ${ROOT_DIR}/resukisu-kernel && git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+The script reads out/target.env generated by prepare.sh.
+Modern Android kernels such as common-android14-6.1 use Bazel/Kleaf.
+Legacy branches such as common-android11-5.4 use build/build.sh.
 EOF
+}
 
-echo ""
-echo "=== Build Complete ==="
-if [ -f "${KERNEL_IMAGE}" ]; then
-    echo "Artifacts in: ${DIST_DIR}/"
-    ls -lh "${DIST_DIR}/"
-    echo ""
-    echo "Deploy bzImage to AVD and load modules to enable root."
+run() {
+    if [ "${DRY_RUN}" -eq 1 ]; then
+        printf '[dry-run]'
+        printf ' %q' "$@"
+        printf '\n'
+    else
+        "$@"
+    fi
+}
+
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --dry-run) DRY_RUN=1; shift ;;
+        --dist-dir) DIST_DIR="$2"; shift 2 ;;
+        --build-system) BUILD_SYSTEM="$2"; shift 2 ;;
+        -j|--jobs) JOBS="$2"; shift 2 ;;
+        -h|--help) usage; exit 0 ;;
+        *) echo "Unknown argument: $1" >&2; usage; exit 2 ;;
+    esac
+done
+
+if [ -f "${TARGET_ENV}" ]; then
+    # shellcheck source=/dev/null
+    . "${TARGET_ENV}"
 else
-    echo "WARNING: bzImage was not built. Check the build output above for errors."
-    exit 1
+    echo "WARNING: ${TARGET_ENV} not found. Run prepare.sh first for version-aware builds." >&2
 fi
+
+REPO_BRANCH="${AVD_REPO_BRANCH:-}"
+KERNEL_VERSION="${AVD_KERNEL_VERSION:-}"
+
+select_build_system() {
+    if [ "${BUILD_SYSTEM}" != "auto" ]; then
+        echo "${BUILD_SYSTEM}"
+        return
+    fi
+    if [ -f "${ROOT_DIR}/common-modules/virtual-device/BUILD.bazel" ]; then
+        echo "bazel"
+    else
+        echo "legacy"
+    fi
+}
+
+find_bazel() {
+    for candidate in "${ROOT_DIR}/tools/bazel" bazel bazelisk; do
+        if [ -x "${candidate}" ] || command -v "${candidate}" >/dev/null 2>&1; then
+            echo "${candidate}"
+            return 0
+        fi
+    done
+    return 1
+}
+
+configure_arm64_qemu_env() {
+    host_arch="$(uname -m)"
+    if [ "${host_arch}" = "aarch64" ] || [ "${host_arch}" = "arm64" ]; then
+        if [ -d "${QEMU_LD_PREFIX:-/opt/aosp-x86_64-sysroot}" ]; then
+            export QEMU_LD_PREFIX="${QEMU_LD_PREFIX:-/opt/aosp-x86_64-sysroot}"
+        fi
+    fi
+}
+
+build_with_bazel() {
+    bazel_bin="$(find_bazel)" || {
+        if [ "${DRY_RUN}" -eq 1 ]; then
+            bazel_bin="${ROOT_DIR}/tools/bazel"
+        else
+            echo "ERROR: Bazel wrapper not found. Sync the full build tools or install bazel/bazelisk." >&2
+            exit 1
+        fi
+    }
+    mkdir -p "${DIST_DIR}"
+    cd "${ROOT_DIR}"
+    run "${bazel_bin}" run \
+        --config=fast \
+        --config=stamp \
+        --lto=none \
+        --jobs="${JOBS}" \
+        //common-modules/virtual-device:virtual_device_x86_64_dist \
+        -- --dist_dir="${DIST_DIR}"
+}
+
+build_with_legacy() {
+    build_config="${BUILD_CONFIG:-common-modules/virtual-device/build.config.goldfish.x86_64}"
+    if [ ! -f "${ROOT_DIR}/${build_config}" ]; then
+        build_config="common-modules/virtual-device/build.config.virtual_device.x86_64"
+    fi
+    if [ ! -f "${ROOT_DIR}/${build_config}" ]; then
+        echo "ERROR: no supported legacy build config found." >&2
+        exit 1
+    fi
+    mkdir -p "${DIST_DIR}"
+    cd "${ROOT_DIR}"
+    configure_arm64_qemu_env
+    run env \
+        BUILD_CONFIG="${build_config}" \
+        DIST_DIR="${DIST_DIR}" \
+        LTO=none \
+        ./build/build.sh -j"${JOBS}" YACC=/usr/bin/bison LEX=/usr/bin/flex
+}
+
+echo "=== AVD ReSukiSU kernel build ==="
+echo "Kernel version : ${KERNEL_VERSION:-unknown}"
+echo "Repo branch    : ${REPO_BRANCH:-unknown}"
+echo "Build system   : $(select_build_system)"
+echo "Dist dir       : ${DIST_DIR}"
+echo "Jobs           : ${JOBS}"
+echo ""
+
+case "$(select_build_system)" in
+    bazel) build_with_bazel ;;
+    legacy) build_with_legacy ;;
+    *) echo "ERROR: unsupported build system: ${BUILD_SYSTEM}" >&2; exit 2 ;;
+esac

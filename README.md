@@ -1,66 +1,53 @@
 # ReSukiSU AVD Kernel Builder
 
-构建带 [ReSukiSU](https://github.com/ReSukiSU/ReSukiSU) 的 Android Virtual Device (AVD / Goldfish) x86_64 内核，用于在 ARM64 VPS 上交叉编译。
+用于为 Android Emulator / AVD 的 `x86_64` virtual-device 内核准备、集成、构建和打包 ReSukiSU。设计目标是：切换 AVD 内核版本时只改输入的 `/proc/version`，上游源码修改全部通过 `patches/` 重放，不把临时改动混进 AOSP 仓库。
 
 ## 目录结构
 
-```
+```text
 android-kernel/
-├── common/                  # Android Common Kernel 源码 (repo sync)
-├── common-modules/          # 外部内核模块 (virtual-device, etc.)
-├── KernelSU/                # ReSukiSU 内核模块 (git submodule)
-├── patches/                 # 内核补丁 (由 setup.sh 自动应用)
-├── prebuilts/               # Clang/GCC 预编译工具链 (repo sync)
-├── build/                   # 构建工具
-├── ksu.fragment             # ReSukiSU 内核配置片段
-├── setup.sh                 # 集成设置脚本
-├── build.sh                 # 构建脚本
-├── README.md                # 本文件
-├── out/                     # 构建输出 (git ignored)
-└── dist/                    # 最终产物 (git ignored)
+├── prepare.sh                 # 解析 /proc/version，repo init/sync，按 CI commit 对齐
+├── setup.sh                   # 应用 patch series，创建 ReSukiSU symlink
+├── build.sh                   # 调用 Bazel/Kleaf 或 legacy build.sh，支持 --dry-run
+├── package.sh                 # 从 dist/ 打包部署包，不编译
+├── scripts/
+│   └── avd_kernel_meta.py     # 版本解析和 CI BUILD_INFO 元数据工具
+├── patches/                   # 可选 patch 目录；默认可以为空
+├── ksu.fragment               # ReSukiSU Kconfig 片段
+├── KernelSU/                  # ReSukiSU submodule
+├── common/                    # repo sync 得到的 kernel/common
+├── common-modules/            # repo sync 得到的 virtual-device modules
+├── out/                       # 生成的 target.json/target.env 和中间产物
+└── dist/                      # 构建产物
 ```
 
-## 前提条件
+## 典型流程
 
-- ARM64 或 x86_64 Linux 主机
-- `repo` 工具 (Android 源码管理)
-- ARM64 主机需要 QEMU user-mode 支持以运行 x86_64 工具链
+### 1. 准备目标版本
 
-### 安装 repo
+把 AVD 的完整 `/proc/version` 直接传给 `prepare.sh`：
 
 ```bash
-mkdir -p ~/bin
-curl https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo
-chmod a+x ~/bin/repo
-export PATH="$HOME/bin:$PATH"
+bash prepare.sh --proc-version \
+'Linux version 6.1.23-android14-4-00257-g7e35917775b8-ab9964412 (build-user@build-host) ...'
 ```
 
-### ARM64 主机: 安装 QEMU x86_64 支持
+该示例会解析为：
 
-```bash
-# 使用 tonistiigi/binfmt 注册 x86_64 binfmt
-docker run --privileged --rm tonistiigi/binfmt --install x86_64
-
-# 或手动安装 qemu-user-static
-sudo dnf install -y qemu-user-static  # RHEL/AlmaLinux
-sudo apt-get install -y qemu-user-static  # Debian/Ubuntu
+```text
+repo branch : common-android14-6.1
+build id    : 9964412
+commit      : 7e35917775b8
 ```
 
-## 快速开始
+`prepare.sh` 会生成：
 
-### 1. 首次设置 — 同步内核源码
-
-```bash
-cd /path/to/android-kernel
-
-# 初始化 repo (android14-6.1 GKI 分支)
-repo init -u https://android.googlesource.com/kernel/manifest -b common-android14-6.1
-
-# 同步内核源码和工具链
-repo sync -c kernel/common kernel/common-modules/virtual-device kernel/configs \
-    prebuilts/clang/host/linux-x86 platform/prebuilts/build-tools \
-    kernel/prebuilts/build-tools platform/prebuilts/clang-tools
+```text
+out/target.json   # 完整元数据和 CI 状态
+out/target.env    # build/setup 脚本可 source 的环境变量
 ```
+
+如果 CI 的 `BUILD_INFO` 可访问，脚本会按 `repo-dict` checkout `kernel/common`、`kernel/common-modules/virtual-device`、`kernel/build` 等仓库的精确 commit。若 CI artifact 不存在，则至少用 `/proc/version` 中的 `-g<commit>` 对齐 `kernel/common`，并在 `out/target.json` 中记录 fallback。
 
 ### 2. 集成 ReSukiSU
 
@@ -68,157 +55,125 @@ repo sync -c kernel/common kernel/common-modules/virtual-device kernel/configs \
 bash setup.sh
 ```
 
-此脚本会：
-- 初始化 ReSukiSU git submodule (`KernelSU/`)
-- 创建符号链接 `common/drivers/kernelsu -> ../../KernelSU/kernel`
-- 修改 `common/drivers/Kconfig` 和 `common/drivers/Makefile`（保持为工作区修改，不提交到上游内核）
+`setup.sh` 会做三类事情：
 
-### 3. 构建内核
+- 如果 `patches/` 中存在 patch，则通过 `git apply` 应用；
+- 临时向 `common/drivers/Kconfig` 和 `common/drivers/Makefile` 写入 ReSukiSU 入口；
+- 创建未跟踪 symlink：`common/drivers/kernelsu -> ../../KernelSU/kernel`。
 
-```bash
-bash build.sh
-```
-
-产物在 `dist/` 目录中：
-- `bzImage` — 内核镜像
-- `*.ko` — 内核模块
-- `vmlinux` — 未压缩内核 (调试用)
-- `System.map` — 符号表
-- `build-info.txt` — 构建信息
-
-### 4. 部署到 AVD
+清理集成：
 
 ```bash
-# 在本地机器上 (需要 Android SDK)
-adb root
-adb remount
-adb push dist/bzImage /data/local/tmp/
-adb push dist/*.ko /vendor/lib/modules/
-
-# 加载内核模块 (在 adb shell 中)
-su -c "insmod /vendor/lib/modules/<module>.ko"
-
-# 验证
-adb shell cat /proc/version
-adb shell su -c "id"
+bash setup.sh --cleanup
 ```
 
-## 切换内核版本
-
-当你需要为不同的 AVD 内核版本构建时：
-
-### 1. 获取目标 AVD 的内核版本
-
-在已启动的 AVD 上运行：
+检查 patch 状态：
 
 ```bash
-adb shell cat /proc/version
+bash setup.sh --check
 ```
 
-输出示例：
-```
-Linux version 6.1.23-android14-4-00257-g7e35917775b8-ab9964412 ...
-```
+### 3. 构建
 
-关键信息：
-- **内核版本**: 6.1.23-android14-4 → GKI 分支 `android14-6.1`
-- **Build ID**: ab9964412
-- **Commit**: 7e35917775b8
-
-### 2. 重新初始化 repo
+先 dry-run，确认会调用什么：
 
 ```bash
-# 切换到对应的 GKI 分支
-repo init -u https://android.googlesource.com/kernel/manifest -b common-android14-6.1
-
-# 或指定其他分支，如:
-# repo init -u ... -b common-android15-6.6    (Android 15, kernel 6.6)
-# repo init -u ... -b common-android13-5.15   (Android 13, kernel 5.15)
-
-repo sync -c
+bash build.sh --dry-run
 ```
 
-### 3. 检出精确的内核 commit (可选)
+Android 13/14/15 的 modern kernel 会使用 Bazel/Kleaf：
 
 ```bash
-cd common
-git checkout <commit-hash>  # 例如: 7e35917775b8
-cd ..
+bash build.sh -j4
 ```
 
-### 4. 重新集成和构建
+等价核心目标：
 
 ```bash
-bash setup.sh
-bash build.sh
+//common-modules/virtual-device:virtual_device_x86_64_dist
 ```
 
-### GKI 版本对照
+Android 11 / 5.4 等 legacy 分支才会退回 `build/build.sh`。
 
-| Android 版本 | GKI 分支 | 内核版本 |
-|-------------|----------|---------|
-| Android 14 | common-android14-6.1 | 6.1.x |
-| Android 14 | common-android14-5.15 | 5.15.x |
-| Android 13 | common-android13-5.15 | 5.15.x |
-| Android 12 | common-android12-5.10 | 5.10.x |
-| Android 11 | common-android11-5.4 | 5.4.x |
-
-## ReSukiSU 配置选项
-
-在 `ksu.fragment` 中可配置：
-
-```conf
-# 基础 KSU 支持 (必须)
-CONFIG_KSU=y
-
-# Hook 模式 (默认 tracepoint, 适用于 GKI 2.0 5.10+)
-# CONFIG_KSU_TRACEPOINT_HOOK=y    # 默认
-
-# 调试
-# CONFIG_KSU_DEBUG=y
-
-# 多管理器支持
-# CONFIG_KSU_MULTI_MANAGER_SUPPORT=y
-
-# SuSFS (需要内核侧 susfs 补丁)
-# CONFIG_KSU_SUSFS=y
-```
-
-## 自定义 ReSukiSU 管理器签名
-
-在构建时设置环境变量：
+### 4. 打包
 
 ```bash
-export KSU_EXPECTED_SIZE=<size>
-export KSU_EXPECTED_HASH=<hash>
-export KSU_MANAGER_PACKAGE=<package.name>
-bash build.sh
+bash package.sh
 ```
 
-## 故障排除
+生成：
 
-### QEMU/clang 无法运行 (ARM64)
+```text
+avd-resukisu-deploy/
+avd-resukisu-deploy.tar.gz
+```
+
+`package.sh` 不编译，只从现有 `dist/` 收集 `bzImage` 和 `.ko`。
+
+## 版本映射
+
+| `/proc/version` 模式 | repo branch |
+|---|---|
+| `6.6.x-android15-*` | `common-android15-6.6` |
+| `6.1.x-android14-*` | `common-android14-6.1` |
+| `5.15.x-android14-*` | `common-android14-5.15` |
+| `5.15.x-android13-*` | `common-android13-5.15` |
+| `5.10.x-android12-*` | `common-android12-5.10` |
+| `5.4.x-android11-*` | `common-android11-5.4` |
+
+## Patch 策略
+
+默认情况下 `patches/` 可以为空，ReSukiSU 通过 `setup.sh` 写入临时 driver 入口并创建软链接接入。运行：
+
+```bash
+bash setup.sh --cleanup
+```
+
+会移除这些临时入口和软链接，让 `common/` 回到 clean 状态。
+
+不要把手工编辑留在 `common/`、`common-modules/` 或 `build/` 里作为长期定制。确实需要额外上游改动时：
+
+1. 在临时工作区修改并确认 diff；
+2. 生成 patch 到 `patches/common/` 或 `patches/<repo-branch>/`；
+3. 让 `setup.sh` 通过 `git apply` 应用；
+4. 用 `setup.sh --cleanup` 验证可反向恢复。
+
+当前默认补丁目录为空；新增 patch 后可用 `bash setup.sh --check` 检查可应用性。
+
+## ARM64 VPS 注意事项
+
+ARM64 主机运行 AOSP x86_64 预编译工具链需要 binfmt/QEMU。构建脚本不会自动安装系统依赖；推荐先准备：
+
+```bash
+sudo dnf install -y git curl python3 bison flex bc cpio rsync zip unzip tar
+sudo podman run --privileged --rm docker.io/tonistiigi/binfmt --install amd64
+```
+
+如果使用 legacy `build/build.sh` 且 host tools 需要 x86_64 sysroot，可设置：
 
 ```bash
 export QEMU_LD_PREFIX=/opt/aosp-x86_64-sysroot
 ```
 
-### repo sync 失败
+## 常用命令
+
+只解析版本，不同步：
 
 ```bash
-# 减少并发数
-repo sync -c -j2
+bash prepare.sh --proc-version-file proc-version.txt --no-sync
 ```
 
-### 内核模块签名错误
+已有 branch/build id 时准备：
 
-在 `ksu.fragment` 中确认：
-```conf
-# CONFIG_MODULE_SIG_ALL is not set
+```bash
+bash prepare.sh \
+  --repo-branch common-android14-6.1 \
+  --build-id 9964412 \
+  --common-commit 7e35917775b8
 ```
 
-### ReSukiSU 编译错误
+只同步，不 checkout CI commit：
 
-1. 检查内核版本兼容性 (ReSukiSU 支持 Linux 3.4+)
-2. 确认所有依赖的 Kconfig 选项已启用 (如 `CONFIG_KALLSYMS`)
-3. 查看 ReSukiSU 文档: https://resukisu.github.io
+```bash
+bash prepare.sh --proc-version-file proc-version.txt --no-checkout
+```
