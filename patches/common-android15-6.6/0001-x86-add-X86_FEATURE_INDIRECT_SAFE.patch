@@ -1,0 +1,43 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: VPS Builder <build@vps.local>
+Date: Thu, 25 Jun 2026 00:00:00 +0000
+Subject: [PATCH] x86: add X86_FEATURE_INDIRECT_SAFE for ReSukiSU
+
+ReSukiSU's x86_64 tracepoint syscall hook requires a marker that the kernel has
+the indirect syscall bypass hardening expected by its hook implementation.
+
+Android 15 / 6.6 has a different cpufeatures layout than Android 14 / 6.1, so
+keep this as a branch-specific patch.
+---
+ arch/x86/include/asm/cpufeatures.h | 1 +
+ arch/x86/kernel/cpu/common.c       | 1 +
+ 2 files changed, 2 insertions(+)
+
+diff --git a/arch/x86/include/asm/cpufeatures.h b/arch/x86/include/asm/cpufeatures.h
+index 3d2039a320e7..eaf78da837ee 100644
+--- a/arch/x86/include/asm/cpufeatures.h
++++ b/arch/x86/include/asm/cpufeatures.h
+@@ -444,6 +444,7 @@
+ #define X86_FEATURE_SEV_ES		(19*32+ 3) /* AMD Secure Encrypted Virtualization - Encrypted State */
+ #define X86_FEATURE_V_TSC_AUX		(19*32+ 9) /* "" Virtual TSC_AUX */
+ #define X86_FEATURE_SME_COHERENT	(19*32+10) /* "" AMD hardware-enforced cache coherency */
++#define X86_FEATURE_INDIRECT_SAFE	(19*32+11) /* "" Kernel has indirect syscall bypass hardening */
+ #define X86_FEATURE_DEBUG_SWAP		(19*32+14) /* AMD SEV-ES full debug state swap support */
+ 
+ /* AMD-defined Extended Feature 2 EAX, CPUID level 0x80000021 (EAX), word 20 */
+diff --git a/arch/x86/kernel/cpu/common.c b/arch/x86/kernel/cpu/common.c
+index c5a2af630426..d2c104822087 100644
+--- a/arch/x86/kernel/cpu/common.c
++++ b/arch/x86/kernel/cpu/common.c
+@@ -1646,6 +1646,7 @@ static void __init early_identify_cpu(struct cpuinfo_x86 *c)
+ 		get_cpu_vendor(c);
+ 		get_cpu_cap(c);
+ 		get_cpu_address_sizes(c);
+ 		setup_force_cpu_cap(X86_FEATURE_CPUID);
++		setup_force_cpu_cap(X86_FEATURE_INDIRECT_SAFE);
+ 		cpu_parse_early_param();
+ 
+ 		if (this_cpu->c_early_init)
+-- 
+2.45.0
+

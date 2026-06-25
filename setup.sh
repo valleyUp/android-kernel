@@ -22,10 +22,14 @@ Usage:
 
 Notes:
   - patches/common/ applies to common/.
+  - patches/<repo-branch>/ applies to common/ only for that target branch.
   - patches/kernelsu/ applies to KernelSU/.
   - common/drivers/Kconfig and common/drivers/Makefile changes are transient
     working-tree integration changes. Run --cleanup to return upstream clean.
-  - If out/target.env exists, branch-specific patches under patches/<branch>/ are used.
+  - If out/target.env exists, branch-specific patches such as
+    patches/common-android15-6.6/ are used.
+  - --cleanup reverses all known common branch patches so stale patches from a
+    previous target branch can be cleaned after switching AVD versions.
 EOF
 }
 
@@ -54,6 +58,14 @@ common_patch_series() {
         if [ -n "${REPO_BRANCH}" ]; then
             find "${PATCHES_DIR}/${REPO_BRANCH}" -maxdepth 1 -type f -name '*.patch' 2>/dev/null
         fi
+    } | sort
+}
+
+common_patch_cleanup_series() {
+    {
+        find "${PATCHES_DIR}" -maxdepth 1 -type f -name '*.patch' 2>/dev/null
+        find "${PATCHES_DIR}/common" -maxdepth 1 -type f -name '*.patch' 2>/dev/null
+        find "${PATCHES_DIR}"/common-* -maxdepth 1 -type f -name '*.patch' 2>/dev/null
     } | sort
 }
 
@@ -206,7 +218,7 @@ cleanup() {
     echo "=== Reversing kernel patch series ==="
     while IFS= read -r patch; do
         [ -n "${patch}" ] && reverse_patch_file "${KERNEL_DIR}" "${patch}" "common"
-    done < <(common_patch_series | sort -r)
+    done < <(common_patch_cleanup_series | sort -r)
     echo "=== Reversing ReSukiSU patch series ==="
     while IFS= read -r patch; do
         [ -n "${patch}" ] && reverse_patch_file "${KSU_SUBMODULE}" "${patch}" "kernelsu"

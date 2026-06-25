@@ -165,20 +165,21 @@ bash setup.sh --cleanup
 不要把手工编辑留在 `common/`、`common-modules/` 或 `build/` 里作为长期定制。确实需要额外上游改动时：
 
 1. 在临时工作区修改并确认 diff；
-2. 生成 patch 到 `patches/common/` 或 `patches/<repo-branch>/`；
+2. 跨版本通用 patch 放到 `patches/common/`，只适用于单一内核分支的 patch 放到 `patches/<repo-branch>/`；
 3. 让 `setup.sh` 通过 `git apply` 应用；
 4. 用 `setup.sh --cleanup` 验证可反向恢复。
 
 当前默认包含这些 patch：
 
 ```text
-patches/common/0001-tools-lib-subcmd-avoid-glibc-c23-strtol-redirect.patch
-patches/common/0002-x86-add-X86_FEATURE_INDIRECT_SAFE.patch
+patches/common-android14-6.1/0001-tools-lib-subcmd-avoid-glibc-c23-strtol-redirect.patch
+patches/common-android14-6.1/0002-x86-add-X86_FEATURE_INDIRECT_SAFE.patch
+patches/common-android15-6.6/0001-x86-add-X86_FEATURE_INDIRECT_SAFE.patch
 patches/kernelsu/0001-compat-include-linux-compat-before-fallback.patch
 patches/kernelsu/0002-x86-fix-patch-memory-includes.patch
 ```
 
-第一枚只影响 `tools/lib/subcmd` 的 host 工具编译，用于规避新 glibc 头文件和旧 Android host sysroot 混用时的 `__isoc23_strtol` 链接错误。第二枚为 ReSukiSU x86 tracepoint hook 提供 `X86_FEATURE_INDIRECT_SAFE` 标记。第三枚修复 ReSukiSU 在 x86_64 6.1 上的 `in_compat_syscall` fallback 宏 include 顺序冲突。第四枚修正 x86_64 `patch_memory.c` 的头文件依赖：去掉会触发 `__ro_after_init` / `signal.h -Warray-bounds` 的 `text-patching.h` 和 `cacheflush.h`，显式包含 `linux/pgtable.h` 以提供 `pgd_offset` 等页表遍历内联函数。
+Android 14 的 host-tools patch 只影响 `tools/lib/subcmd`，用于规避新 glibc 头文件和旧 Android host sysroot 混用时的 `__isoc23_strtol` 链接错误。Android 15 / 6.6 的 hermetic sysroot 仍需要 `_GNU_SOURCE` 暴露 `asprintf`、`vasprintf`、`strcasestr`，因此不会应用这枚 Android 14 patch。两个 `X86_FEATURE_INDIRECT_SAFE` patch 分别适配 6.1 和 6.6 的 x86 cpufeatures 布局，为 ReSukiSU x86 tracepoint hook 提供标记。KernelSU patch 修复 x86_64 上的 `in_compat_syscall` fallback 宏 include 顺序冲突，以及 `patch_memory.c` 的头文件依赖。
 
 新增 patch 后可用 `bash setup.sh --check` 检查可应用性。
 
