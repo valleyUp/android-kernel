@@ -166,13 +166,17 @@ bash setup.sh --cleanup
 3. 让 `setup.sh` 通过 `git apply` 应用；
 4. 用 `setup.sh --cleanup` 验证可反向恢复。
 
-当前默认包含一个 host tools 兼容性 patch：
+当前默认包含这些 patch：
 
 ```text
 patches/common/0001-tools-lib-subcmd-avoid-glibc-c23-strtol-redirect.patch
+patches/common/0002-x86-add-X86_FEATURE_INDIRECT_SAFE.patch
+patches/kernelsu/0001-compat-include-linux-compat-before-fallback.patch
 ```
 
-它只影响 `tools/lib/subcmd` 的 host 工具编译，用于规避新 glibc 头文件和旧 Android host sysroot 混用时的 `__isoc23_strtol` 链接错误。新增 patch 后可用 `bash setup.sh --check` 检查可应用性。
+第一枚只影响 `tools/lib/subcmd` 的 host 工具编译，用于规避新 glibc 头文件和旧 Android host sysroot 混用时的 `__isoc23_strtol` 链接错误。第二枚为 ReSukiSU x86 tracepoint hook 提供 `X86_FEATURE_INDIRECT_SAFE` 标记。第三枚修复 ReSukiSU 在 x86_64 6.1 上的 `in_compat_syscall` fallback 宏 include 顺序冲突。
+
+新增 patch 后可用 `bash setup.sh --check` 检查可应用性。
 
 ## ARM64 VPS 注意事项
 

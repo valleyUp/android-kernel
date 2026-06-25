@@ -1,0 +1,31 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: VPS Builder <build@vps.local>
+Date: Thu, 25 Jun 2026 00:00:00 +0000
+Subject: [PATCH] compat: include linux/compat before fallback syscall macro
+
+On x86_64 Android 6.1, <asm/compat.h> provides in_compat_syscall and defines a
+marker macro with the same name. ReSukiSU's fallback macro can be defined before
+<linux/compat.h> is included, causing the later x86 inline function declaration
+to be parsed through the fallback function-like macro.
+
+Include <linux/compat.h> first so the kernel-provided implementation is visible
+before the fallback guard is evaluated.
+---
+ kernel/compat/kernel_compat.h | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/kernel/compat/kernel_compat.h b/kernel/compat/kernel_compat.h
+index 5e8786f..067d642 100644
+--- a/kernel/compat/kernel_compat.h
++++ b/kernel/compat/kernel_compat.h
+@@ -4,6 +4,7 @@
+ #include <linux/fs.h>
+ #include <linux/version.h>
+ #include <linux/fdtable.h>
++#include <linux/compat.h>
+ #include "ss/policydb.h"
+ #include "linux/key.h"
+ 
+-- 
+2.45.0
+

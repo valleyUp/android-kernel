@@ -16,12 +16,13 @@ REPO_BRANCH=""
 usage() {
     cat <<'EOF'
 Usage:
-  bash setup.sh             Add transient ReSukiSU driver entries and symlink.
+  bash setup.sh             Apply patches, add transient driver entries and symlink.
   bash setup.sh --cleanup   Remove transient entries, symlink, and applied patches.
   bash setup.sh --check     Check patch state and report integration state.
 
 Notes:
-  - patches/ may be empty; setup.sh still wires ReSukiSU through a symlink.
+  - patches/common/ applies to common/.
+  - patches/kernelsu/ applies to KernelSU/.
   - common/drivers/Kconfig and common/drivers/Makefile changes are transient
     working-tree integration changes. Run --cleanup to return upstream clean.
   - If out/target.env exists, branch-specific patches under patches/<branch>/ are used.
@@ -46,7 +47,7 @@ init_vars() {
     SYMLINK="${DRIVER_DIR}/kernelsu"
 }
 
-patch_series() {
+common_patch_series() {
     {
         find "${PATCHES_DIR}" -maxdepth 1 -type f -name '*.patch' 2>/dev/null
         find "${PATCHES_DIR}/common" -maxdepth 1 -type f -name '*.patch' 2>/dev/null
@@ -56,37 +57,50 @@ patch_series() {
     } | sort
 }
 
+ksu_patch_series() {
+    {
+        find "${PATCHES_DIR}/kernelsu" -maxdepth 1 -type f -name '*.patch' 2>/dev/null
+        find "${PATCHES_DIR}/resukisu" -maxdepth 1 -type f -name '*.patch' 2>/dev/null
+    } | sort
+}
+
 apply_patch_file() {
-    patch="$1"
-    if (cd "${KERNEL_DIR}" && git apply --check "${patch}" >/dev/null 2>&1); then
-        (cd "${KERNEL_DIR}" && git apply "${patch}")
-        echo "[+] Applied patch: ${patch#${ROOT_DIR}/}"
-    elif (cd "${KERNEL_DIR}" && git apply -R --check "${patch}" >/dev/null 2>&1); then
-        echo "[i] Patch already applied: ${patch#${ROOT_DIR}/}"
+    target_dir="$1"
+    patch="$2"
+    label="$3"
+    if (cd "${target_dir}" && git apply --check "${patch}" >/dev/null 2>&1); then
+        (cd "${target_dir}" && git apply "${patch}")
+        echo "[+] Applied ${label} patch: ${patch#${ROOT_DIR}/}"
+    elif (cd "${target_dir}" && git apply -R --check "${patch}" >/dev/null 2>&1); then
+        echo "[i] ${label} patch already applied: ${patch#${ROOT_DIR}/}"
     else
-        echo "ERROR: patch cannot be applied cleanly: ${patch#${ROOT_DIR}/}" >&2
+        echo "ERROR: ${label} patch cannot be applied cleanly: ${patch#${ROOT_DIR}/}" >&2
         exit 1
     fi
 }
 
 reverse_patch_file() {
-    patch="$1"
-    if (cd "${KERNEL_DIR}" && git apply -R --check "${patch}" >/dev/null 2>&1); then
-        (cd "${KERNEL_DIR}" && git apply -R "${patch}")
-        echo "[-] Reversed patch: ${patch#${ROOT_DIR}/}"
+    target_dir="$1"
+    patch="$2"
+    label="$3"
+    if (cd "${target_dir}" && git apply -R --check "${patch}" >/dev/null 2>&1); then
+        (cd "${target_dir}" && git apply -R "${patch}")
+        echo "[-] Reversed ${label} patch: ${patch#${ROOT_DIR}/}"
     else
-        echo "[i] Patch was not applied: ${patch#${ROOT_DIR}/}"
+        echo "[i] ${label} patch was not applied: ${patch#${ROOT_DIR}/}"
     fi
 }
 
 check_patch_file() {
-    patch="$1"
-    if (cd "${KERNEL_DIR}" && git apply --check "${patch}" >/dev/null 2>&1); then
-        echo "[can-apply] ${patch#${ROOT_DIR}/}"
-    elif (cd "${KERNEL_DIR}" && git apply -R --check "${patch}" >/dev/null 2>&1); then
-        echo "[applied]   ${patch#${ROOT_DIR}/}"
+    target_dir="$1"
+    patch="$2"
+    label="$3"
+    if (cd "${target_dir}" && git apply --check "${patch}" >/dev/null 2>&1); then
+        echo "[can-apply] ${label}: ${patch#${ROOT_DIR}/}"
+    elif (cd "${target_dir}" && git apply -R --check "${patch}" >/dev/null 2>&1); then
+        echo "[applied]   ${label}: ${patch#${ROOT_DIR}/}"
     else
-        echo "[conflict]  ${patch#${ROOT_DIR}/}"
+        echo "[conflict]  ${label}: ${patch#${ROOT_DIR}/}"
         return 1
     fi
 }
@@ -171,8 +185,12 @@ setup() {
     ensure_resukisu
     echo "=== Applying kernel patch series ==="
     while IFS= read -r patch; do
-        [ -n "${patch}" ] && apply_patch_file "${patch}"
-    done < <(patch_series)
+        [ -n "${patch}" ] && apply_patch_file "${KERNEL_DIR}" "${patch}" "common"
+    done < <(common_patch_series)
+    echo "=== Applying ReSukiSU patch series ==="
+    while IFS= read -r patch; do
+        [ -n "${patch}" ] && apply_patch_file "${KSU_SUBMODULE}" "${patch}" "kernelsu"
+    done < <(ksu_patch_series)
     ensure_driver_entries
     create_symlink
     echo "[OK] ReSukiSU integration ready."
@@ -187,17 +205,25 @@ cleanup() {
     remove_driver_entries
     echo "=== Reversing kernel patch series ==="
     while IFS= read -r patch; do
-        [ -n "${patch}" ] && reverse_patch_file "${patch}"
-    done < <(patch_series | sort -r)
+        [ -n "${patch}" ] && reverse_patch_file "${KERNEL_DIR}" "${patch}" "common"
+    done < <(common_patch_series | sort -r)
+    echo "=== Reversing ReSukiSU patch series ==="
+    while IFS= read -r patch; do
+        [ -n "${patch}" ] && reverse_patch_file "${KSU_SUBMODULE}" "${patch}" "kernelsu"
+    done < <(ksu_patch_series | sort -r)
     echo "[OK] cleanup complete."
 }
 
 check() {
     init_vars
+    ensure_resukisu
     failed=0
     while IFS= read -r patch; do
-        [ -n "${patch}" ] && check_patch_file "${patch}" || failed=1
-    done < <(patch_series)
+        [ -n "${patch}" ] && check_patch_file "${KERNEL_DIR}" "${patch}" "common" || failed=1
+    done < <(common_patch_series)
+    while IFS= read -r patch; do
+        [ -n "${patch}" ] && check_patch_file "${KSU_SUBMODULE}" "${patch}" "kernelsu" || failed=1
+    done < <(ksu_patch_series)
     report_driver_state
     exit "${failed}"
 }
