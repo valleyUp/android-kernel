@@ -12,6 +12,7 @@ import subprocess
 import sys
 import urllib.error
 import urllib.request
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any
 
@@ -25,11 +26,26 @@ BRANCH_RULES = (
     (re.compile(r"^5\.4\.\d+-android11-\d+$"), "common-android11-5.4"),
 )
 
-REPO_PATHS = {
+FALLBACK_REPO_PATHS = {
     "kernel/common": ("common",),
     "kernel/common-modules/virtual-device": ("common-modules/virtual-device",),
     "kernel/build": ("build/kernel", "build"),
     "kernel/configs": ("kernel/configs",),
+    "kernel/prebuilts/build-tools": ("prebuilts/kernel-build-tools",),
+    "platform/build/bazel_common_rules": ("build/bazel_common_rules",),
+    "platform/external/bazel-skylib": ("external/bazel-skylib",),
+    "platform/external/python/absl-py": ("external/python/absl-py",),
+    "platform/external/stardoc": ("external/stardoc",),
+    "platform/prebuilts/bazel/linux-x86_64": ("prebuilts/bazel/linux-x86_64",),
+    "platform/prebuilts/build-tools": ("prebuilts/build-tools",),
+    "platform/prebuilts/clang-tools": ("prebuilts/clang-tools",),
+    "platform/prebuilts/clang/host/linux-x86": ("prebuilts/clang/host/linux-x86",),
+    "platform/prebuilts/gcc/linux-x86/host/x86_64-linux-glibc2.17-4.8": (
+        "prebuilts/gcc/linux-x86/host/x86_64-linux-glibc2.17-4.8",
+    ),
+    "platform/prebuilts/jdk/jdk11": ("prebuilts/jdk/jdk11",),
+    "platform/system/tools/mkbootimg": ("tools/mkbootimg",),
+    "toolchain/prebuilts/ndk/r23": ("prebuilts/ndk-r23",),
 }
 
 
@@ -202,12 +218,65 @@ def emit_env(meta: dict[str, Any]) -> None:
         print(f"export {key}={shlex.quote(str(value))}")
 
 
+def parse_manifest_projects(root: Path) -> dict[str, list[str]]:
+    projects: dict[str, list[str]] = {}
+    manifest_root = root / ".repo" / "manifests"
+    candidates = []
+    if (root / ".repo" / "manifest.xml").is_file():
+        candidates.append(root / ".repo" / "manifest.xml")
+    if (manifest_root / "default.xml").is_file():
+        candidates.append(manifest_root / "default.xml")
+    local_manifest_dir = root / ".repo" / "local_manifests"
+    if local_manifest_dir.is_dir():
+        candidates.extend(sorted(local_manifest_dir.glob("*.xml")))
+
+    seen: set[Path] = set()
+
+    def parse_one(path: Path) -> None:
+        path = path.resolve()
+        if path in seen or not path.is_file():
+            return
+        seen.add(path)
+        try:
+            tree = ET.parse(path)
+        except ET.ParseError:
+            return
+        elem = tree.getroot()
+        for include in elem.findall("include"):
+            name = include.get("name")
+            if name:
+                parse_one(manifest_root / name)
+        for project in elem.findall("project"):
+            name = project.get("name")
+            if not name:
+                continue
+            relpath = project.get("path") or name
+            projects.setdefault(name, [])
+            if relpath not in projects[name]:
+                projects[name].append(relpath)
+
+    for candidate in candidates:
+        parse_one(candidate)
+    return projects
+
+
+def repo_paths(root: Path, repo_name: str) -> tuple[str, ...]:
+    paths: list[str] = []
+    for relpath in parse_manifest_projects(root).get(repo_name, []):
+        if relpath not in paths:
+            paths.append(relpath)
+    for relpath in FALLBACK_REPO_PATHS.get(repo_name, ()):
+        if relpath not in paths:
+            paths.append(relpath)
+    return tuple(paths)
+
+
 def checkout_plan(meta: dict[str, Any], root: Path) -> list[tuple[str, str, str]]:
     plan: list[tuple[str, str, str]] = []
     for repo_name, commit in meta.get("repo_commits", {}).items():
-        if not commit or repo_name not in REPO_PATHS:
+        if not commit:
             continue
-        for relpath in REPO_PATHS[repo_name]:
+        for relpath in repo_paths(root, repo_name):
             if git_head(root / relpath):
                 plan.append((repo_name, relpath, commit))
                 break
@@ -247,13 +316,14 @@ def verify_checkout(meta: dict[str, Any], root: Path, required: list[str]) -> in
             continue
         found_path = ""
         actual = ""
-        for relpath in REPO_PATHS.get(repo_name, ()):
+        paths = repo_paths(root, repo_name)
+        for relpath in paths:
             actual = git_head(root / relpath)
             if actual:
                 found_path = relpath
                 break
         if not actual:
-            errors.append(f"missing git project checkout for {repo_name} at {REPO_PATHS.get(repo_name, ())}")
+            errors.append(f"missing git project checkout for {repo_name} at {paths}")
             continue
         if actual != expected:
             errors.append(f"{repo_name} ({found_path}) is {actual[:12]}, expected {expected[:12]}")

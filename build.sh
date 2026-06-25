@@ -11,6 +11,18 @@ JOBS="${JOBS:-$(nproc)}"
 DRY_RUN=0
 BUILD_SYSTEM="${BUILD_SYSTEM:-auto}"
 SKIP_METADATA_CHECK=0
+CRITICAL_REPOS=(
+    kernel/common
+    kernel/common-modules/virtual-device
+    kernel/build
+    kernel/configs
+    kernel/prebuilts/build-tools
+    platform/build/bazel_common_rules
+    platform/external/bazel-skylib
+    platform/prebuilts/bazel/linux-x86_64
+    platform/prebuilts/build-tools
+    platform/prebuilts/jdk/jdk11
+)
 
 usage() {
     cat <<'EOF'
@@ -103,13 +115,11 @@ validate_bazel_metadata() {
         echo "ERROR: ${TARGET_JSON} not found. Run prepare.sh before build.sh." >&2
         exit 1
     fi
-    python3 "${ROOT_DIR}/scripts/avd_kernel_meta.py" verify-checkout \
-        --meta "${TARGET_JSON}" \
-        --root "${ROOT_DIR}" \
-        --required kernel/common \
-        --required kernel/common-modules/virtual-device \
-        --required kernel/build \
-        --required kernel/configs || {
+    VERIFY_ARGS=(verify-checkout --meta "${TARGET_JSON}" --root "${ROOT_DIR}")
+    for repo_name in "${CRITICAL_REPOS[@]}"; do
+        VERIFY_ARGS+=(--required "${repo_name}")
+    done
+    python3 "${ROOT_DIR}/scripts/avd_kernel_meta.py" "${VERIFY_ARGS[@]}" || {
             echo "" >&2
             echo "Fix: rerun prepare.sh with the target /proc/version, then rerun setup.sh and build.sh." >&2
             exit 1

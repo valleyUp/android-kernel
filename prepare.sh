@@ -17,6 +17,18 @@ JOBS="${JOBS:-4}"
 DO_SYNC=1
 DO_CHECKOUT=1
 DRY_RUN=0
+CRITICAL_REPOS=(
+    kernel/common
+    kernel/common-modules/virtual-device
+    kernel/build
+    kernel/configs
+    kernel/prebuilts/build-tools
+    platform/build/bazel_common_rules
+    platform/external/bazel-skylib
+    platform/prebuilts/bazel/linux-x86_64
+    platform/prebuilts/build-tools
+    platform/prebuilts/jdk/jdk11
+)
 
 usage() {
     cat <<'EOF'
@@ -123,13 +135,11 @@ done
 
 if [ "${DRY_RUN}" -eq 0 ]; then
     echo "=== Verify exact checkout ==="
-    python3 "${ROOT_DIR}/scripts/avd_kernel_meta.py" verify-checkout \
-        --meta "${META_JSON}" \
-        --root "${ROOT_DIR}" \
-        --required kernel/common \
-        --required kernel/common-modules/virtual-device \
-        --required kernel/build \
-        --required kernel/configs
+    VERIFY_ARGS=(verify-checkout --meta "${META_JSON}" --root "${ROOT_DIR}")
+    for repo_name in "${CRITICAL_REPOS[@]}"; do
+        VERIFY_ARGS+=(--required "${repo_name}")
+    done
+    python3 "${ROOT_DIR}/scripts/avd_kernel_meta.py" "${VERIFY_ARGS[@]}"
 else
     echo "[dry-run] checkout verification skipped."
 fi

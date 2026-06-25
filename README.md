@@ -47,9 +47,9 @@ out/target.json   # 完整元数据和 CI 状态
 out/target.env    # build/setup 脚本可 source 的环境变量
 ```
 
-脚本会读取 Android CI `BUILD_INFO` 的 `repo-dict`，并 checkout `kernel/common`、`kernel/common-modules/virtual-device`、`kernel/build`、`kernel/configs` 等仓库的精确 commit。Android CI 的 `view/BUILD_INFO` 页面有时返回 Artifact Viewer HTML，脚本会自动解析其中的签名 artifact URL 再下载真实 JSON。
+脚本会读取 Android CI `BUILD_INFO` 的 `repo-dict`，并按当前 repo manifest checkout 所有本地已同步仓库的精确 commit，包括 `kernel/common`、`kernel/common-modules/virtual-device`、`kernel/build`、`kernel/configs`、`prebuilts/bazel`、`prebuilts/jdk`、`build/bazel_common_rules` 等。Android CI 的 `view/BUILD_INFO` 页面有时返回 Artifact Viewer HTML，脚本会自动解析其中的签名 artifact URL 再下载真实 JSON。
 
-对 Android 13/14/15 的 Bazel/Kleaf 分支，不能只对齐 `kernel/common`。如果 `common-modules/virtual-device` 留在 branch tip，而 `common` 切到旧 commit，会出现类似 `//common:modules.bzl does not contain symbol get_gki_modules_list` 的 Bazel API mismatch。`prepare.sh` 和 `build.sh` 会在这种不完整状态下直接失败，要求重新执行准备步骤。
+对 Android 13/14/15 的 Bazel/Kleaf 分支，不能只对齐 `kernel/common`。如果 `common-modules/virtual-device`、`kernel/build` 或 Bazel/JDK prebuilts 留在 branch tip，会出现类似 `//common:modules.bzl does not contain symbol get_gki_modules_list` 或 `@local_jdk//:runtime_toolchain_definition` 的版本错配。`prepare.sh` 和 `build.sh` 会在这种不完整状态下直接失败，要求重新执行准备步骤。
 
 ### 2. 集成 ReSukiSU
 
