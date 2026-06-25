@@ -34,10 +34,13 @@ EOF
 }
 
 init_vars() {
+    REPO_BRANCH="${AVD_REPO_BRANCH:-}"
     if [ -f "${TARGET_ENV}" ]; then
         # shellcheck source=/dev/null
         . "${TARGET_ENV}"
         REPO_BRANCH="${AVD_REPO_BRANCH:-}"
+    elif [ -f "${ROOT_DIR}/out/target.json" ]; then
+        REPO_BRANCH="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("repo_branch",""))' "${ROOT_DIR}/out/target.json")"
     fi
     if [ ! -d "${KERNEL_DIR}" ]; then
         echo "ERROR: kernel source not found at ${KERNEL_DIR}. Run prepare.sh first." >&2
@@ -74,6 +77,13 @@ ksu_patch_series() {
         find "${PATCHES_DIR}/kernelsu" -maxdepth 1 -type f -name '*.patch' 2>/dev/null
         find "${PATCHES_DIR}/resukisu" -maxdepth 1 -type f -name '*.patch' 2>/dev/null
     } | sort
+}
+
+requires_common_patch() {
+    case "${REPO_BRANCH}" in
+        common-android14-6.1|common-android15-6.6) return 0 ;;
+        *) return 1 ;;
+    esac
 }
 
 apply_patch_file() {
@@ -195,10 +205,19 @@ report_driver_state() {
 setup() {
     init_vars
     ensure_resukisu
+    echo "Target repo branch: ${REPO_BRANCH:-unknown}"
     echo "=== Applying kernel patch series ==="
-    while IFS= read -r patch; do
+    mapfile -t common_patches < <(common_patch_series)
+    if [ "${#common_patches[@]}" -eq 0 ]; then
+        if requires_common_patch; then
+            echo "ERROR: no common patch found for ${REPO_BRANCH}. Expected patches/${REPO_BRANCH}/" >&2
+            exit 1
+        fi
+        echo "[i] No common patches selected for ${REPO_BRANCH:-unknown}."
+    fi
+    for patch in "${common_patches[@]}"; do
         [ -n "${patch}" ] && apply_patch_file "${KERNEL_DIR}" "${patch}" "common"
-    done < <(common_patch_series)
+    done
     echo "=== Applying ReSukiSU patch series ==="
     while IFS= read -r patch; do
         [ -n "${patch}" ] && apply_patch_file "${KSU_SUBMODULE}" "${patch}" "kernelsu"
@@ -229,10 +248,20 @@ cleanup() {
 check() {
     init_vars
     ensure_resukisu
+    echo "Target repo branch: ${REPO_BRANCH:-unknown}"
     failed=0
-    while IFS= read -r patch; do
+    mapfile -t common_patches < <(common_patch_series)
+    if [ "${#common_patches[@]}" -eq 0 ]; then
+        if requires_common_patch; then
+            echo "[missing]  common: expected patches/${REPO_BRANCH}/"
+            failed=1
+        else
+            echo "[state] common patches: none selected"
+        fi
+    fi
+    for patch in "${common_patches[@]}"; do
         [ -n "${patch}" ] && check_patch_file "${KERNEL_DIR}" "${patch}" "common" || failed=1
-    done < <(common_patch_series)
+    done
     while IFS= read -r patch; do
         [ -n "${patch}" ] && check_patch_file "${KSU_SUBMODULE}" "${patch}" "kernelsu" || failed=1
     done < <(ksu_patch_series)
