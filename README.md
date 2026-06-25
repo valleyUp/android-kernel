@@ -9,6 +9,7 @@ android-kernel/
 ├── common/                  # Android Common Kernel 源码 (repo sync)
 ├── common-modules/          # 外部内核模块 (virtual-device, etc.)
 ├── KernelSU/                # ReSukiSU 内核模块 (git submodule)
+├── patches/                 # 内核补丁 (由 setup.sh 自动应用)
 ├── prebuilts/               # Clang/GCC 预编译工具链 (repo sync)
 ├── build/                   # 构建工具
 ├── ksu.fragment             # ReSukiSU 内核配置片段

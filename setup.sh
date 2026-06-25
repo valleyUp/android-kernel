@@ -5,11 +5,14 @@
 #
 # This script:
 #   1. Initializes the ReSukiSU git submodule (KernelSU/)
-#   2. Creates a symlink: common/drivers/kernelsu -> ../../KernelSU/kernel
-#   3. Appends build entries to common/drivers/Kconfig and common/drivers/Makefile
+#   2. Applies kernel patches from patches/ (e.g. X86_FEATURE_INDIRECT_SAFE)
+#   3. Creates a symlink: common/drivers/kernelsu -> ../../KernelSU/kernel
+#   4. Appends build entries to common/drivers/Kconfig and common/drivers/Makefile
 #
 # The modifications to common/ are intentionally left as uncommitted working-tree
 # changes — they do NOT pollute the upstream AOSP kernel git history.
+#
+# Patches are applied with 'git apply' so they can be cleanly reversed.
 #
 # Usage:
 #   bash setup.sh                  # Integrate ReSukiSU
@@ -44,6 +47,42 @@ initialize_variables() {
 	DRIVER_MAKEFILE="$DRIVER_DIR/Makefile"
 	DRIVER_KCONFIG="$DRIVER_DIR/Kconfig"
 	SYMLINK="$DRIVER_DIR/kernelsu"
+	KERNEL_DIR="$GKI_ROOT/common"
+	PATCHES_DIR="$GKI_ROOT/patches"
+}
+
+# Applies kernel patches from patches/ directory
+apply_patches() {
+	if [ ! -d "$PATCHES_DIR" ]; then
+		return 0
+	fi
+	for patch in "$PATCHES_DIR"/*.patch; do
+		if [ ! -f "$patch" ]; then
+			continue
+		fi
+		if (cd "$KERNEL_DIR" && git apply --check "$patch" 2>/dev/null); then
+			(cd "$KERNEL_DIR" && git apply "$patch") && echo "[+] Applied: $(basename "$patch")"
+		else
+			echo "[i] Patch already applied or conflicts: $(basename "$patch")"
+		fi
+	done
+}
+
+# Reverse-applies kernel patches
+reverse_patches() {
+	if [ ! -d "$PATCHES_DIR" ]; then
+		return 0
+	fi
+	for patch in "$PATCHES_DIR"/*.patch; do
+		if [ ! -f "$patch" ]; then
+			continue
+		fi
+		if (cd "$KERNEL_DIR" && git apply -R --check "$patch" 2>/dev/null); then
+			(cd "$KERNEL_DIR" && git apply -R "$patch") && echo "[-] Reversed: $(basename "$patch")"
+		else
+			echo "[i] Patch not applied, skipping reverse: $(basename "$patch")"
+		fi
+	done
 }
 
 # Reverts modifications made by this script
@@ -58,6 +97,7 @@ perform_cleanup() {
 	if grep -q "drivers/kernelsu/Kconfig" "$DRIVER_KCONFIG" 2>/dev/null; then
 		sed -i '/drivers\/kernelsu\/Kconfig/d' "$DRIVER_KCONFIG" && echo "[-] Kconfig reverted."
 	fi
+	reverse_patches
 	echo '[+] Cleanup complete.'
 }
 
@@ -74,7 +114,11 @@ setup_kernelsu() {
 		echo "[i] KernelSU submodule already present at $KSU_SUBMODULE"
 	fi
 
-	# 2. Create symlink
+	# 2. Apply kernel patches
+	echo "[+] Applying kernel patches..."
+	apply_patches
+
+	# 3. Create symlink
 	if [ -L "$SYMLINK" ]; then
 		echo "[i] Symlink already exists: $SYMLINK -> $(readlink "$SYMLINK")"
 	else
@@ -83,7 +127,7 @@ setup_kernelsu() {
 		echo "[+] Symlink created: drivers/kernelsu -> $REL_PATH"
 	fi
 
-	# 3. Append to drivers/Makefile (if not already present)
+	# 4. Append to drivers/Makefile (if not already present)
 	if grep -q "kernelsu" "$DRIVER_MAKEFILE" 2>/dev/null; then
 		echo "[i] Makefile already has kernelsu entry."
 	else
@@ -91,7 +135,7 @@ setup_kernelsu() {
 		echo "[+] Appended to drivers/Makefile."
 	fi
 
-	# 4. Append to drivers/Kconfig (if not already present)
+	# 5. Append to drivers/Kconfig (if not already present)
 	if grep -q "drivers/kernelsu/Kconfig" "$DRIVER_KCONFIG" 2>/dev/null; then
 		echo "[i] Kconfig already has kernelsu entry."
 	else
