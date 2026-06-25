@@ -47,7 +47,9 @@ out/target.json   # 完整元数据和 CI 状态
 out/target.env    # build/setup 脚本可 source 的环境变量
 ```
 
-如果 CI 的 `BUILD_INFO` 可访问，脚本会按 `repo-dict` checkout `kernel/common`、`kernel/common-modules/virtual-device`、`kernel/build` 等仓库的精确 commit。若 CI artifact 不存在，则至少用 `/proc/version` 中的 `-g<commit>` 对齐 `kernel/common`，并在 `out/target.json` 中记录 fallback。
+脚本会读取 Android CI `BUILD_INFO` 的 `repo-dict`，并 checkout `kernel/common`、`kernel/common-modules/virtual-device`、`kernel/build`、`kernel/configs` 等仓库的精确 commit。Android CI 的 `view/BUILD_INFO` 页面有时返回 Artifact Viewer HTML，脚本会自动解析其中的签名 artifact URL 再下载真实 JSON。
+
+对 Android 13/14/15 的 Bazel/Kleaf 分支，不能只对齐 `kernel/common`。如果 `common-modules/virtual-device` 留在 branch tip，而 `common` 切到旧 commit，会出现类似 `//common:modules.bzl does not contain symbol get_gki_modules_list` 的 Bazel API mismatch。`prepare.sh` 和 `build.sh` 会在这种不完整状态下直接失败，要求重新执行准备步骤。
 
 ### 2. 集成 ReSukiSU
 
@@ -85,6 +87,15 @@ Android 13/14/15 的 modern kernel 会使用 Bazel/Kleaf：
 
 ```bash
 bash build.sh -j4
+```
+
+`build.sh` 会先校验 `out/target.json` 中记录的 CI commit 是否与当前源码 checkout 一致。如果你更新了脚本或换了 `/proc/version`，先重新运行：
+
+```bash
+bash prepare.sh --proc-version-file proc-version.txt -j16
+bash setup.sh --cleanup 2>/dev/null || true
+bash setup.sh
+bash build.sh -j16
 ```
 
 等价核心目标：

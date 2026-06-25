@@ -121,4 +121,17 @@ while IFS="$(printf '\t')" read -r repo_name relpath commit; do
     run git -C "${full_path}" checkout -B avd-exact FETCH_HEAD
 done
 
+if [ "${DRY_RUN}" -eq 0 ]; then
+    echo "=== Verify exact checkout ==="
+    python3 "${ROOT_DIR}/scripts/avd_kernel_meta.py" verify-checkout \
+        --meta "${META_JSON}" \
+        --root "${ROOT_DIR}" \
+        --required kernel/common \
+        --required kernel/common-modules/virtual-device \
+        --required kernel/build \
+        --required kernel/configs
+else
+    echo "[dry-run] checkout verification skipped."
+fi
+
 echo "[OK] prepare complete. Next: bash setup.sh"

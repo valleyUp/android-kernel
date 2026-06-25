@@ -8,6 +8,7 @@ import json
 import os
 import re
 import shlex
+import subprocess
 import sys
 import urllib.error
 import urllib.request
@@ -86,9 +87,32 @@ def load_gitiles_json(url: str) -> dict[str, Any]:
     return json.loads(body)
 
 
-def fetch_json_url(url: str) -> dict[str, Any]:
+def fetch_text_url(url: str) -> str:
     with urllib.request.urlopen(url, timeout=60) as response:
-        return json.loads(response.read().decode("utf-8"))
+        return response.read().decode("utf-8")
+
+
+def artifact_url_from_viewer_html(body: str) -> str:
+    match = re.search(r"var JSVariables = (\{.*?\});", body, re.DOTALL)
+    if not match:
+        return ""
+    try:
+        data = json.loads(match.group(1))
+    except json.JSONDecodeError:
+        return ""
+    return str(data.get("artifactUrl", ""))
+
+
+def fetch_json_artifact(url: str) -> tuple[dict[str, Any], str]:
+    body = fetch_text_url(url)
+    try:
+        return json.loads(body), ""
+    except json.JSONDecodeError as direct_error:
+        artifact_url = artifact_url_from_viewer_html(body)
+        if not artifact_url:
+            raise direct_error
+        artifact_body = fetch_text_url(artifact_url)
+        return json.loads(artifact_body), artifact_url
 
 
 def resolve_common_commit(short_or_full: str) -> str:
@@ -123,6 +147,7 @@ def build_metadata(args: argparse.Namespace) -> dict[str, Any]:
     ci_target = args.ci_target
     build_id = args.build_id or meta.get("build_id") or ""
     build_info_url = ""
+    artifact_url = ""
     build_info: dict[str, Any] | None = None
     ci_error = ""
     if build_id:
@@ -131,7 +156,7 @@ def build_metadata(args: argparse.Namespace) -> dict[str, Any]:
             f"{ci_target}/latest/view/BUILD_INFO"
         )
         try:
-            build_info = fetch_json_url(build_info_url)
+            build_info, artifact_url = fetch_json_artifact(build_info_url)
         except (urllib.error.URLError, urllib.error.HTTPError, json.JSONDecodeError) as exc:
             ci_error = str(exc)
 
@@ -149,6 +174,7 @@ def build_metadata(args: argparse.Namespace) -> dict[str, Any]:
     meta["ci"] = {
         "target": ci_target,
         "build_info_url": build_info_url,
+        "artifact_url": artifact_url,
         "build_info_found": build_info is not None,
         "error": ci_error,
     }
@@ -182,10 +208,64 @@ def checkout_plan(meta: dict[str, Any], root: Path) -> list[tuple[str, str, str]
         if not commit or repo_name not in REPO_PATHS:
             continue
         for relpath in REPO_PATHS[repo_name]:
-            if (root / relpath).is_dir():
+            if git_head(root / relpath):
                 plan.append((repo_name, relpath, commit))
                 break
     return plan
+
+
+def git_head(path: Path) -> str:
+    if not path.is_dir():
+        return ""
+    try:
+        top = subprocess.check_output(
+            ["git", "-C", str(path), "rev-parse", "--show-toplevel"],
+            stderr=subprocess.DEVNULL,
+            text=True,
+        ).strip()
+        if Path(top).resolve() != path.resolve():
+            return ""
+        return subprocess.check_output(
+            ["git", "-C", str(path), "rev-parse", "HEAD"],
+            stderr=subprocess.DEVNULL,
+            text=True,
+        ).strip()
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return ""
+
+
+def verify_checkout(meta: dict[str, Any], root: Path, required: list[str]) -> int:
+    repo_commits = meta.get("repo_commits", {})
+    errors: list[str] = []
+    for repo_name in required:
+        expected = repo_commits.get(repo_name, "")
+        if not expected:
+            errors.append(
+                f"missing BUILD_INFO commit for {repo_name}; rerun prepare.sh after "
+                "updating this workflow, or provide a CI build id whose BUILD_INFO is accessible"
+            )
+            continue
+        found_path = ""
+        actual = ""
+        for relpath in REPO_PATHS.get(repo_name, ()):
+            actual = git_head(root / relpath)
+            if actual:
+                found_path = relpath
+                break
+        if not actual:
+            errors.append(f"missing git project checkout for {repo_name} at {REPO_PATHS.get(repo_name, ())}")
+            continue
+        if actual != expected:
+            errors.append(f"{repo_name} ({found_path}) is {actual[:12]}, expected {expected[:12]}")
+        else:
+            print(f"[OK] {repo_name} ({found_path}) = {actual[:12]}")
+
+    if errors:
+        print("ERROR: kernel source checkout is not aligned with target BUILD_INFO:", file=sys.stderr)
+        for error in errors:
+            print(f"  - {error}", file=sys.stderr)
+        return 1
+    return 0
 
 
 def cmd_parse(args: argparse.Namespace) -> int:
@@ -232,6 +312,12 @@ def cmd_checkout_plan(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_verify_checkout(args: argparse.Namespace) -> int:
+    meta = json.loads(Path(args.meta).read_text(encoding="utf-8"))
+    root = Path(args.root).resolve()
+    return verify_checkout(meta, root, args.required)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -263,6 +349,12 @@ def main() -> int:
     plan_p.add_argument("--meta", required=True)
     plan_p.add_argument("--root", default=os.getcwd())
     plan_p.set_defaults(func=cmd_checkout_plan)
+
+    verify_p = sub.add_parser("verify-checkout")
+    verify_p.add_argument("--meta", required=True)
+    verify_p.add_argument("--root", default=os.getcwd())
+    verify_p.add_argument("--required", action="append", required=True)
+    verify_p.set_defaults(func=cmd_verify_checkout)
 
     return args_func(parser.parse_args())
 
