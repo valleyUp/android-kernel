@@ -22,6 +22,8 @@
 /dist/
 /avd-resukisu-deploy/
 /avd-resukisu-deploy.tar.gz
+/avd-sukisu-deploy/
+/avd-sukisu-deploy.tar.gz
 
 # ── Prebuilt manager APK (large binary, gitignored) ──
 /*.apk

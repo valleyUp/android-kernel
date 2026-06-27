@@ -72,6 +72,12 @@ else
     echo "WARNING: ${TARGET_ENV} not found. Run prepare.sh first for version-aware builds." >&2
 fi
 
+KSU_ENV="${ROOT_DIR}/out/ksu.env"
+if [ -f "${KSU_ENV}" ]; then
+    # shellcheck source=/dev/null
+    . "${KSU_ENV}"
+fi
+
 REPO_BRANCH="${AVD_REPO_BRANCH:-}"
 KERNEL_VERSION="${AVD_KERNEL_VERSION:-}"
 
@@ -203,9 +209,12 @@ verify_ksu_enabled() {
     echo "[i] CONFIG_KSU=y verified in built kernel config."
 }
 
-echo "=== AVD ReSukiSU kernel build ==="
+echo "=== AVD SukiSU Ultra kernel build ==="
 echo "Kernel version : ${KERNEL_VERSION:-unknown}"
 echo "Repo branch    : ${REPO_BRANCH:-unknown}"
+if [ -n "${KSU_MANAGER_VERSION:-}" ]; then
+    echo "KSU version    : ${KSU_MANAGER_VERSION} (commit ${KSU_COMMIT:-unknown})"
+fi
 echo "Build system   : $(select_build_system)"
 echo "Dist dir       : ${DIST_DIR}"
 echo "Jobs           : ${JOBS}"
@@ -218,3 +227,7 @@ case "$(select_build_system)" in
 esac
 
 verify_ksu_enabled
+
+if [ "${REPO_BRANCH}" = "common-android15-6.6" ]; then
+    echo "[i] Deployed kernel requires kernel cmdline: syscall_hardening=off"
+fi
