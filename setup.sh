@@ -118,6 +118,8 @@ resolve_manager_commit() {
     commit=$(git -C "${KSU_SUBMODULE}" rev-list --first-parent --max-count=1 --skip="${skip}" HEAD)
     actual=$(git -C "${KSU_SUBMODULE}" rev-list --count "${commit}")
     if [ "${actual}" -ne "${target}" ]; then
+        # Rare fallback: --first-parent --skip can land on a merge commit whose
+        # total rev-list count differs. Linear scan is O(n^2) but almost never runs.
         commit=""
         while IFS= read -r c; do
             cnt=$(git -C "${KSU_SUBMODULE}" rev-list --count "${c}")
@@ -182,7 +184,7 @@ find_patch_files() {
 
 requires_common_patch() {
     case "${REPO_BRANCH}" in
-        common-android12) return 0 ;;
+        common-android12|common-android14-6.1|common-android15-6.6) return 0 ;;
         *) return 1 ;;
     esac
 }

@@ -47,11 +47,7 @@ fi
 
 run rm -rf "${DEPLOY_DIR}"
 run mkdir -p "${DEPLOY_DIR}/kernel" "${DEPLOY_DIR}/modules/all_modules" "${DEPLOY_DIR}/modules/ramdisk_modules"
-if [ -f "${DIST_DIR}/bzImage" ]; then
-    run cp "${DIST_DIR}/bzImage" "${DEPLOY_DIR}/kernel/"
-else
-    run cp "${DIST_DIR}/bzImage" "${DEPLOY_DIR}/kernel/"
-fi
+run cp "${DIST_DIR}/bzImage" "${DEPLOY_DIR}/kernel/"
 
 if [ -d "${DIST_DIR}" ]; then
     while IFS= read -r ko; do
@@ -100,8 +96,10 @@ AVD SukiSU-Ultra kernel deploy
 1. Replace the AVD kernel with kernel/bzImage from this package.
 
 2. Pass syscall_hardening=off at boot (required for KernelSU on x86_64 6.6):
-   - config.ini: kernel.parameters = syscall_hardening=off
-   - or emulator:  -append syscall_hardening=off
+   - config.ini (~/.android/avd/<AVD>.avd/config.ini):
+       kernel.parameters = syscall_hardening=off
+   - or emulator 36+ CLI (pass through QEMU, not a top-level -append flag):
+       emulator ... -kernel path/to/bzImage -qemu -append syscall_hardening=off
 
 3. Verify after boot:
    cat /sys/devices/system/cpu/syscall_hardening

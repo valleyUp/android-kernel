@@ -1,22 +1,22 @@
-# ReSukiSU AVD Kernel Builder
+# SukiSU-Ultra AVD Kernel Builder
 
-用于为 Android Emulator / AVD 的 `x86_64` virtual-device 内核准备、集成、构建和打包 ReSukiSU。设计目标是：切换 AVD 内核版本时只改输入的 `/proc/version`，上游源码修改全部通过 `patches/` 重放，不把临时改动混进 AOSP 仓库。
+用于为 Android Emulator / AVD 的 `x86_64` virtual-device 内核准备、集成、构建和打包 SukiSU-Ultra。设计目标是：切换 AVD 内核版本时只改输入的 `/proc/version`，上游源码修改全部通过 `patches/` 重放，不把临时改动混进 AOSP 仓库。
 
 ## 目录结构
 
 ```text
 android-kernel/
 ├── prepare.sh                 # 解析 /proc/version，repo init/sync，按 CI commit 对齐
-├── setup.sh                   # 应用 patch series，创建 ReSukiSU symlink 和 driver 入口，pin 版本号
+├── setup.sh                   # checkout KernelSU 版本、应用 patch、创建 symlink 和 driver 入口
 ├── build.sh                   # 调用 Bazel/Kleaf 或 legacy build.sh，支持 --dry-run
 ├── package.sh                 # 从 dist/ 打包部署包，不编译
 ├── scripts/
 │   └── avd_kernel_meta.py     # 版本解析和 CI BUILD_INFO 元数据工具
-├── patches/                   # 可选 patch 目录；默认可以为空
-├── KernelSU/                  # ReSukiSU submodule
+├── patches/                   # 按分支和 submodule 分类的 patch series
+├── KernelSU/                  # SukiSU-Ultra submodule
 ├── common/                    # repo sync 得到的 kernel/common
 ├── common-modules/            # repo sync 得到的 virtual-device modules
-├── out/                       # 生成的 target.json/target.env 和中间产物
+├── out/                       # 生成的 target.json/target.env/ksu.env 和中间产物
 └── dist/                      # 构建产物
 ```
 
@@ -53,18 +53,25 @@ out/target.env    # build/setup 脚本可 source 的环境变量
 
 对 Android 13/14/15 的 Bazel/Kleaf 分支，不能只对齐 `kernel/common`。如果 `common-modules/virtual-device`、`kernel/build` 或 Bazel/JDK prebuilts 留在 branch tip，会出现类似 `//common:modules.bzl does not contain symbol get_gki_modules_list` 或 `@local_jdk//:runtime_toolchain_definition` 的版本错配。`prepare.sh` 和 `build.sh` 会在这种不完整状态下直接失败，要求重新执行准备步骤。
 
-### 2. 集成 ReSukiSU
+### 2. 集成 SukiSU-Ultra
 
 ```bash
 bash setup.sh
 ```
 
-`setup.sh` 会做四类事情：
+默认将 KernelSU submodule checkout 到 versionCode `40796`（与官方 Release APK 对齐）。指定其他版本：
 
+```bash
+bash setup.sh --manager-version 40796
+```
+
+`setup.sh` 会做五类事情：
+
+- 根据 versionCode 反算 commit count，checkout KernelSU 到精确 commit；
 - 如果 `patches/` 中存在 patch，则通过 `git apply` 应用；
-- 临时向 `common/drivers/Kconfig` 和 `common/drivers/Makefile` 写入 ReSukiSU 入口；
+- 临时向 `common/drivers/Kconfig` 和 `common/drivers/Makefile` 写入 KernelSU 入口；
 - 创建未跟踪 symlink：`common/drivers/kernelsu -> ../../KernelSU/kernel`；
-- 写入 `ksu_version.override.mk` pin 驱动版本号以匹配 prebuilt APK。
+- 生成 `out/ksu.env` 记录版本对齐状态。
 
 清理集成：
 
@@ -126,7 +133,7 @@ bash build.sh -j16
 
 Android 11 / 5.4 等 legacy 分支才会退回 `build/build.sh`。
 
-### 4. 打包
+### 4. 打包与部署
 
 ```bash
 bash package.sh
@@ -135,11 +142,29 @@ bash package.sh
 生成：
 
 ```text
-avd-resukisu-deploy/
-avd-resukisu-deploy.tar.gz
+avd-sukisu-deploy/
+avd-sukisu-deploy.tar.gz
 ```
 
-`package.sh` 不编译，只从现有 `dist/` 收集 `bzImage` 和 `.ko`。
+`package.sh` 不编译，只从现有 `dist/` 收集 `bzImage` 和 `.ko`，并附带 `kernel.parameters`、`AVD_DEPLOY.txt`、`ksu.env`。
+
+**6.6 x86_64 启动要求**：KernelSU syscall hook 需要 `syscall_hardening=off`：
+
+```bash
+# 方法 1：config.ini（推荐）
+# ~/.android/avd/<AVD>.avd/config.ini
+kernel.parameters = syscall_hardening=off
+
+# 方法 2：Emulator 36+ CLI（通过 QEMU，非顶层 -append）
+emulator ... -kernel ~/android-kernel/dist/bzImage -qemu -append syscall_hardening=off
+```
+
+验证：
+
+```bash
+adb shell cat /sys/devices/system/cpu/syscall_hardening
+# 期望输出: Disabled
+```
 
 ## 版本映射
 
@@ -154,14 +179,6 @@ avd-resukisu-deploy.tar.gz
 
 ## Patch 策略
 
-默认情况下 `patches/` 可以为空，ReSukiSU 通过 `setup.sh` 写入临时 driver 入口并创建软链接接入。运行：
-
-```bash
-bash setup.sh --cleanup
-```
-
-会移除这些临时入口和软链接，让 `common/` 回到 clean 状态。
-
 不要把手工编辑留在 `common/`、`common-modules/` 或 `build/` 里作为长期定制。确实需要额外上游改动时：
 
 1. 在临时工作区修改并确认 diff；
@@ -173,67 +190,59 @@ bash setup.sh --cleanup
 
 ```text
 patches/common-android14-6.1/0001-tools-lib-subcmd-avoid-glibc-c23-strtol-redirect.patch
-patches/kernelsu/0001-add-resukisu-cert-and-version-pin.patch
+patches/common-android15-6.6/0001-x86-syscall-hardening-bypass-for-kernelsu.patch
+patches/kernelsu/0001-kbuild-deterministic-version.patch
+patches/kernelsu/0002-fix-x86-patch-memory-includes.patch
 ```
 
 `tools/lib/subcmd` patch 规避新 glibc 头文件（2.38+）和旧 Android host sysroot 混用时的 `__isoc23_strtol` 链接错误，仅 Android 14 / 6.1 需要。
 
-`patches/kernelsu/0001` 做三件事：
+`syscall-hardening-bypass` patch 为 6.6 x86_64 KernelSU 引入 `X86_FEATURE_INDIRECT_SAFE` 和 `syscall_hardening=off` cmdline 支持。这是较大的上游改动（8 个文件），但是 KSU syscall hook 的必需条件。
 
-1. **Kbuild 版本公式**：移除依赖网络的 GitHub API（`curl`）版本查询，改用确定性的本地 git 公式 `40000 + rev-list --count HEAD - 2815`，并加入 `-include ksu_version.override.mk` 支持外部版本 pin（`setup.sh` 用此机制匹配 prebuilt APK 的 versionCode，见下文"版本匹配"）。
-2. **ReSukiSU 证书**：在 `manager_sign.h` 添加 ReSukiSU 签名证书（size=`0x377`），并在 `apk_sign.c` 的 `apk_sign_keys[]` 中注册，使 ReSukiSU manager APK 被内核识别为合法 manager。
-3. **seccomp 修复**：`disable_seccomp_for_task()` 在 `CONFIG_GENERIC_ENTRY`（x86 6.1+）下使用 `clear_task_syscall_work(tsk, SECCOMP)` 替代 `clear_tsk_thread_flag(tsk, TIF_SECCOMP)`，因为开启 `GENERIC_ENTRY` 后 x86 不再定义 `TIF_SECCOMP`。
+`kernelsu/0001` 移除 Kbuild 中的 `curl` GitHub API 网络依赖，改用确定性本地 git 公式。
+
+`kernelsu/0002` 修复 x86 `patch_memory.h` 缺少 `linux/bug.h` 导致的编译错误。
 
 ### 版本匹配（driver vs manager）
 
-本仓库使用 ReSukiSU 官方发布的 prebuilt manager APK（带原开发者签名），而非从源码树自行构建。prebuilt APK 的 versionCode 用的是旧版公式：
+SukiSU-Ultra manager APK 和内核驱动使用同一公式：
 
 ```text
-prebuilt APK versionCode = 30000 + commit_count + 700   (旧 SukiSU 公式)
+versionCode = 40000 + git rev-list --count HEAD - 2815
 ```
 
-而当前 v4.1.0 内核驱动的 Kbuild 用新公式：
+`setup.sh` 根据目标 versionCode 反算 commit count，checkout KernelSU submodule 到产生该 versionCode 的精确 commit。驱动 `KSU_VERSION` 与 manager APK versionCode 自然一致，无需 override pin。
 
-```text
-driver KSU_VERSION      = 40000 + commit_count - 2815   (新 ReSukiSU 公式)
-```
-
-两者公式不同，无法自然对齐。因此 `setup.sh` 会写入 `ksu_version.override.mk` 将驱动版本 pin 为 prebuilt APK 的 versionCode（默认 `34990`），使 driver 和 manager 报告一致的版本号。`KSU_VERSION_FULL`（显示用字符串）仍走自然 git 公式，不受影响。
-
-当前 prebuilt APK 与 submodule 状态：
+当前默认状态：
 
 | 项 | 值 |
 |---|---|
-| prebuilt APK | `ReSukiSU_v4.1.0_34990-x86_64-release.apk` |
-| APK versionCode | `34990` |
-| submodule pin | tag `v4.1.0`（commit `0d27e685c`） |
-| 驱动 KSU_VERSION | `34990`（由 override 写入） |
+| prebuilt APK | SukiSU-Ultra GitHub Release（ShirkNeko 签名） |
+| APK versionCode | `40796` |
+| submodule commit | `0ca744a8`（rev-list count = 3611） |
+| 驱动 KSU_VERSION | `40796` |
 
-更换 prebuilt APK 版本时，更新 APK 文件并设置对应的 versionCode：
+更换 prebuilt APK 版本时：
 
 ```bash
-# 用新 APK 的 versionCode 覆盖默认值
-KSU_VERSION_PIN=<new_versionCode> bash setup.sh
-# 或直接修改 setup.sh 中的默认值后重新 setup
+# 下载新 Release APK 到仓库根目录（SukiSU_*.apk）
 bash setup.sh --cleanup 2>/dev/null || true
-KSU_VERSION_PIN=<new_versionCode> bash setup.sh
+bash setup.sh --manager-version <new_versionCode>
 bash build.sh -j16
 ```
 
 验证版本号：
 
 ```bash
-# 驱动版本号（应与 APK versionCode 一致）
-grep '^KSU_VERSION' KernelSU/kernel/ksu_version.override.mk
-# APK versionCode
-aapt dump badging ReSukiSU_*.apk | grep versionCode
+cat out/ksu.env
+aapt dump badging SukiSU_*.apk | grep versionCode
 ```
 
-### Manager 识别与多 manager 支持
+### Manager 识别
 
-ReSukiSU 的签名证书已通过 `patches/kernelsu/0001` 注册到 `apk_sign_keys[]`（index 1），因此 ReSukiSU manager APK 能被内核驱动直接识别为合法 manager。
+官方 SukiSU-Ultra Release APK 使用 ShirkNeko 签名，已在 `apk_sign_keys[]`（index 0）中硬编码，内核驱动可直接识别。
 
-v4.1.0 的多 manager 能力由**运行时 `dynamic_manager` 机制**提供（`dynamic_manager.c`），不依赖 Kconfig 开关——该机制总是编译进内核。manager APK 通过 `KSU_IOCTL_DYNAMIC_MANAGER` ioctl 启用 dynamic sign 后，即可在运行时注册额外的 manager 签名（size + sha256），支持 SukiSU Ultra 等其他 manager 并存。未启用 dynamic sign 时，仅 `apk_sign_keys[]` 中硬编码的证书（ShirkNeko/SukiSU index 0、ReSukiSU index 1）可作为主 manager 被识别。
+多 manager 能力由运行时 `dynamic_manager` 机制提供（`dynamic_manager.c`），通过 `KSU_IOCTL_DYNAMIC_MANAGER` ioctl 注册额外签名。
 
 新增 patch 后可用 `bash setup.sh --check` 检查可应用性。
 
@@ -264,9 +273,9 @@ bash prepare.sh --proc-version-file proc-version.txt --no-sync
 
 ```bash
 bash prepare.sh \
-  --repo-branch common-android14-6.1 \
-  --build-id 9964412 \
-  --common-commit 7e35917775b8
+  --repo-branch common-android15-6.6 \
+  --build-id 13070261 \
+  --common-commit b66429556fb8
 ```
 
 只同步，不 checkout CI commit：
