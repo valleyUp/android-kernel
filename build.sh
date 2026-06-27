@@ -180,6 +180,29 @@ build_with_legacy() {
         ./build/build.sh -j"${JOBS}" YACC=/usr/bin/bison LEX=/usr/bin/flex
 }
 
+verify_ksu_enabled() {
+    [ "${DRY_RUN}" -eq 1 ] && return
+    local config=""
+    for candidate in \
+        "${ROOT_DIR}/out/cache/last_build/common/.config" \
+        "${ROOT_DIR}"/out/android*/common/.config; do
+        if [ -f "${candidate}" ]; then
+            config="${candidate}"
+            break
+        fi
+    done
+    if [ -z "${config}" ]; then
+        echo "[i] No built .config found; skipping CONFIG_KSU check."
+        return
+    fi
+    if ! grep -q '^CONFIG_KSU=y' "${config}"; then
+        echo "ERROR: CONFIG_KSU is not enabled in the built kernel config (${config})." >&2
+        echo "Fix: run setup.sh to integrate KernelSU, then rebuild." >&2
+        exit 1
+    fi
+    echo "[i] CONFIG_KSU=y verified in built kernel config."
+}
+
 echo "=== AVD ReSukiSU kernel build ==="
 echo "Kernel version : ${KERNEL_VERSION:-unknown}"
 echo "Repo branch    : ${REPO_BRANCH:-unknown}"
@@ -193,3 +216,5 @@ case "$(select_build_system)" in
     legacy) build_with_legacy ;;
     *) echo "ERROR: unsupported build system: ${BUILD_SYSTEM}" >&2; exit 2 ;;
 esac
+
+verify_ksu_enabled

@@ -7,13 +7,12 @@
 ```text
 android-kernel/
 ├── prepare.sh                 # 解析 /proc/version，repo init/sync，按 CI commit 对齐
-├── setup.sh                   # 应用 patch series，创建 ReSukiSU symlink
+├── setup.sh                   # 应用 patch series，创建 ReSukiSU symlink 和 driver 入口，pin 版本号
 ├── build.sh                   # 调用 Bazel/Kleaf 或 legacy build.sh，支持 --dry-run
 ├── package.sh                 # 从 dist/ 打包部署包，不编译
 ├── scripts/
 │   └── avd_kernel_meta.py     # 版本解析和 CI BUILD_INFO 元数据工具
 ├── patches/                   # 可选 patch 目录；默认可以为空
-├── ksu.fragment               # ReSukiSU Kconfig 片段
 ├── KernelSU/                  # ReSukiSU submodule
 ├── common/                    # repo sync 得到的 kernel/common
 ├── common-modules/            # repo sync 得到的 virtual-device modules
@@ -60,11 +59,12 @@ out/target.env    # build/setup 脚本可 source 的环境变量
 bash setup.sh
 ```
 
-`setup.sh` 会做三类事情：
+`setup.sh` 会做四类事情：
 
 - 如果 `patches/` 中存在 patch，则通过 `git apply` 应用；
 - 临时向 `common/drivers/Kconfig` 和 `common/drivers/Makefile` 写入 ReSukiSU 入口；
-- 创建未跟踪 symlink：`common/drivers/kernelsu -> ../../KernelSU/kernel`。
+- 创建未跟踪 symlink：`common/drivers/kernelsu -> ../../KernelSU/kernel`；
+- 写入 `ksu_version.override.mk` pin 驱动版本号以匹配 prebuilt APK。
 
 清理集成：
 
@@ -173,13 +173,67 @@ bash setup.sh --cleanup
 
 ```text
 patches/common-android14-6.1/0001-tools-lib-subcmd-avoid-glibc-c23-strtol-redirect.patch
-patches/common-android14-6.1/0002-x86-add-X86_FEATURE_INDIRECT_SAFE.patch
-patches/common-android15-6.6/0001-x86-add-X86_FEATURE_INDIRECT_SAFE.patch
-patches/kernelsu/0001-compat-include-linux-compat-before-fallback.patch
-patches/kernelsu/0002-x86-fix-patch-memory-includes.patch
+patches/kernelsu/0001-add-resukisu-cert-and-version-pin.patch
 ```
 
-Android 14 的 host-tools patch 只影响 `tools/lib/subcmd`，用于规避新 glibc 头文件和旧 Android host sysroot 混用时的 `__isoc23_strtol` 链接错误。Android 15 / 6.6 的 hermetic sysroot 仍需要 `_GNU_SOURCE` 暴露 `asprintf`、`vasprintf`、`strcasestr`，因此不会应用这枚 Android 14 patch。两个 `X86_FEATURE_INDIRECT_SAFE` patch 分别适配 6.1 和 6.6 的 x86 cpufeatures 布局，为 ReSukiSU x86 tracepoint hook 提供标记。KernelSU patch 修复 x86_64 上的 `in_compat_syscall` fallback 宏 include 顺序冲突，以及 `patch_memory.c` 的头文件依赖。
+`tools/lib/subcmd` patch 规避新 glibc 头文件（2.38+）和旧 Android host sysroot 混用时的 `__isoc23_strtol` 链接错误，仅 Android 14 / 6.1 需要。
+
+`patches/kernelsu/0001` 做三件事：
+
+1. **Kbuild 版本公式**：移除依赖网络的 GitHub API（`curl`）版本查询，改用确定性的本地 git 公式 `40000 + rev-list --count HEAD - 2815`，并加入 `-include ksu_version.override.mk` 支持外部版本 pin（`setup.sh` 用此机制匹配 prebuilt APK 的 versionCode，见下文"版本匹配"）。
+2. **ReSukiSU 证书**：在 `manager_sign.h` 添加 ReSukiSU 签名证书（size=`0x377`），并在 `apk_sign.c` 的 `apk_sign_keys[]` 中注册，使 ReSukiSU manager APK 被内核识别为合法 manager。
+3. **seccomp 修复**：`disable_seccomp_for_task()` 在 `CONFIG_GENERIC_ENTRY`（x86 6.1+）下使用 `clear_task_syscall_work(tsk, SECCOMP)` 替代 `clear_tsk_thread_flag(tsk, TIF_SECCOMP)`，因为开启 `GENERIC_ENTRY` 后 x86 不再定义 `TIF_SECCOMP`。
+
+### 版本匹配（driver vs manager）
+
+本仓库使用 ReSukiSU 官方发布的 prebuilt manager APK（带原开发者签名），而非从源码树自行构建。prebuilt APK 的 versionCode 用的是旧版公式：
+
+```text
+prebuilt APK versionCode = 30000 + commit_count + 700   (旧 SukiSU 公式)
+```
+
+而当前 v4.1.0 内核驱动的 Kbuild 用新公式：
+
+```text
+driver KSU_VERSION      = 40000 + commit_count - 2815   (新 ReSukiSU 公式)
+```
+
+两者公式不同，无法自然对齐。因此 `setup.sh` 会写入 `ksu_version.override.mk` 将驱动版本 pin 为 prebuilt APK 的 versionCode（默认 `34990`），使 driver 和 manager 报告一致的版本号。`KSU_VERSION_FULL`（显示用字符串）仍走自然 git 公式，不受影响。
+
+当前 prebuilt APK 与 submodule 状态：
+
+| 项 | 值 |
+|---|---|
+| prebuilt APK | `ReSukiSU_v4.1.0_34990-x86_64-release.apk` |
+| APK versionCode | `34990` |
+| submodule pin | tag `v4.1.0`（commit `0d27e685c`） |
+| 驱动 KSU_VERSION | `34990`（由 override 写入） |
+
+更换 prebuilt APK 版本时，更新 APK 文件并设置对应的 versionCode：
+
+```bash
+# 用新 APK 的 versionCode 覆盖默认值
+KSU_VERSION_PIN=<new_versionCode> bash setup.sh
+# 或直接修改 setup.sh 中的默认值后重新 setup
+bash setup.sh --cleanup 2>/dev/null || true
+KSU_VERSION_PIN=<new_versionCode> bash setup.sh
+bash build.sh -j16
+```
+
+验证版本号：
+
+```bash
+# 驱动版本号（应与 APK versionCode 一致）
+grep '^KSU_VERSION' KernelSU/kernel/ksu_version.override.mk
+# APK versionCode
+aapt dump badging ReSukiSU_*.apk | grep versionCode
+```
+
+### Manager 识别与多 manager 支持
+
+ReSukiSU 的签名证书已通过 `patches/kernelsu/0001` 注册到 `apk_sign_keys[]`（index 1），因此 ReSukiSU manager APK 能被内核驱动直接识别为合法 manager。
+
+v4.1.0 的多 manager 能力由**运行时 `dynamic_manager` 机制**提供（`dynamic_manager.c`），不依赖 Kconfig 开关——该机制总是编译进内核。manager APK 通过 `KSU_IOCTL_DYNAMIC_MANAGER` ioctl 启用 dynamic sign 后，即可在运行时注册额外的 manager 签名（size + sha256），支持 SukiSU Ultra 等其他 manager 并存。未启用 dynamic sign 时，仅 `apk_sign_keys[]` 中硬编码的证书（ShirkNeko/SukiSU index 0、ReSukiSU index 1）可作为主 manager 被识别。
 
 新增 patch 后可用 `bash setup.sh --check` 检查可应用性。
 
